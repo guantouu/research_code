@@ -1,2 +1,4 @@
 */__pycache__
 *.o
+/log
+/layer_record_*
