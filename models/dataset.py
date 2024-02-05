@@ -1,6 +1,8 @@
 import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
+import numpy as np
 import os
 
 def get_cifar10(batch_size, data_root='/tmp/public_dataset/pytorch', train=True, val=True, **kwargs):
@@ -35,6 +37,7 @@ def get_cifar10(batch_size, data_root='/tmp/public_dataset/pytorch', train=True,
         ds.append(test_loader)
     ds = ds[0] if len(ds) == 1 else ds
     return ds
+
 
 def get_cifar100(batch_size, data_root='/tmp/public_dataset/pytorch', train=True, val=True, **kwargs):
     data_root = os.path.expanduser(os.path.join(data_root, 'cifar100-data'))

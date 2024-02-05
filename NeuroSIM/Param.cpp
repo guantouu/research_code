@@ -246,7 +246,7 @@ Param::Param() {
 	relaxArrayCellHeight = 0;           // relax ArrayCellHeight or not
 	relaxArrayCellWidth = 0;            // relax ArrayCellWidth or not
 
-	numColMuxed = 8;                    // How many columns share 1 ADC (for eNVM and FeFET) or parallel SRAM
+	numColMuxed = 6;                    // How many columns share 1 ADC (for eNVM and FeFET) or parallel SRAM
 	
 	// 1.4 update: handle the exception for conventionalsequential case
 	// 1.4 update 230615

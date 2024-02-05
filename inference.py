@@ -144,6 +144,7 @@ acc = 100. * correct / len(test_loader.dataset)
 
 accuracy = acc.cpu().data.numpy()
 
+
 if args.inference:
     print(" --- Hardware Properties --- ")
     print("subArray size: ")
@@ -162,4 +163,3 @@ if args.inference:
 logger('Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
 	test_loss, correct, len(test_loader.dataset), acc))
 
-call(["/bin/bash", './layer_record_'+str(args.model)+'/trace_command.sh'])

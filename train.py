@@ -11,7 +11,6 @@ from utee import wage_util
 from datetime import datetime
 from utee import wage_quantizer
 
-
 parser = argparse.ArgumentParser(description='PyTorch CIFAR-X Example')
 parser.add_argument('--dataset', default='cifar10', help='cifar10|cifar100|imagenet')
 parser.add_argument('--model', default='VGG8', help='VGG8|DenseNet40|ResNet18')
@@ -31,17 +30,18 @@ parser.add_argument('--wl_activate', type = int, default=8)
 parser.add_argument('--wl_error', type = int, default=8)
 # Hardware Properties
 # if do not consider hardware effects, set inference=0
-parser.add_argument('--inference', default=0, help='run hardware inference simulation')
-parser.add_argument('--subArray', default=128, help='size of subArray (e.g. 128*128)')
-parser.add_argument('--ADCprecision', default=5, help='ADC precision (e.g. 5-bit)')
-parser.add_argument('--cellBit', default=4, help='cell precision (e.g. 4-bit/cell)')
-parser.add_argument('--onoffratio', default=10, help='device on/off ratio (e.g. Gmax/Gmin = 3)')
+parser.add_argument('--inference', type=int, default=0, help='run hardware inference simulation')
+parser.add_argument('--subArray', type=int, default=128, help='size of subArray (e.g. 128*128)')
+parser.add_argument('--parallelRead', type=int, default=128, help='number of rows read in parallel (<= subArray e.g. 32)')
+parser.add_argument('--ADCprecision', type=int, default=5, help='ADC precision (e.g. 5-bit)')
+parser.add_argument('--cellBit', type=int, default=1, help='cell precision (e.g. 4-bit/cell)')
+parser.add_argument('--onoffratio', type=float, default=10, help='device on/off ratio (e.g. Gmax/Gmin = 3)')
 # if do not run the device retention / conductance variation effects, set vari=0, v=0
-parser.add_argument('--vari', default=0, help='conductance variation (e.g. 0.1 standard deviation to generate random variation)')
-parser.add_argument('--t', default=0, help='retention time')
-parser.add_argument('--v', default=0, help='drift coefficient')
-parser.add_argument('--detect', default=0, help='if 1, fixed-direction drift, if 0, random drift')
-parser.add_argument('--target', default=0, help='drift target for fixed-direction drift')
+parser.add_argument('--vari', type=float, default=0., help='conductance variation (e.g. 0.1 standard deviation to generate random variation)')
+parser.add_argument('--t', type=float, default=0, help='retention time')
+parser.add_argument('--v', type=float, default=0, help='drift coefficient')
+parser.add_argument('--detect', type=int, default=0, help='if 1, fixed-direction drift, if 0, random drift')
+parser.add_argument('--target', type=float, default=0, help='drift target for fixed-direction drift, range 0-1')
 current_time = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
 
 args = parser.parse_args()
