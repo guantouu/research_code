@@ -21,6 +21,7 @@ RUN python3.8 ./get-pip.py
 
 RUN pip install numpy
 RUN pip install torch==2.0.0 torchvision==0.15.1 torchaudio==2.0.1
+RUN pip install mlflow
 
 RUN rm ./get-pip.py
 
