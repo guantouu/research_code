@@ -1,8 +1,6 @@
 import torch
 from torch.nn.modules import Module
 
-
-
 class SSE(Module):
     def __init__(self):
         super(SSE, self).__init__()

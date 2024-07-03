@@ -1,0 +1,18 @@
+{
+    "exp_name": "model inference",
+    "dataset": "imagenet",
+    "net": "ResNet18",
+    "batch_size": 64,
+    "seed": 117,
+    "logdir": "/app/log",
+    "inference": true,
+    "quantization": "hessian",
+    "ratio": 0.1,
+    "ADCprecision": 16,
+    "wl_weight": 8,
+    "wl_input": 8,
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 4
+    }
+}
