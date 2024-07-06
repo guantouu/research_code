@@ -8,31 +8,33 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from utils.common_utils import process_config
 from datetime import datetime
+from utils.strip_utils import compute_strip_importances, model_strip_group
 import json
-from utee import hook
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/inference.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/hessian_trace.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')
     configs = process_config(args.config)
 
-    log_path = os.path.join(configs.logdir, configs.net, configs.dataset)
+    log_path = os.path.join(configs.logdir, configs.net, configs.dataset, 'log.log')
     logging.basicConfig(format='%(asctime)s - %(message)s',
-                        datefmt='%d-%b-%y %H:%M:%S', filename=log_path + '/log.log')
+                        datefmt='%d-%b-%y %H:%M:%S', filename=log_path)
     logging.getLogger().setLevel(logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler())
 
     logging.info(configs)
 
-    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, f'saliency_{configs.ratio}.pth')
+    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, 'best.pth')
     net = configs.net
 
     if net == 'resnet50':
-        from models.Q_ResNet import q_resnet50
-        model = torch.load(inference_log_dir)
+        from models.ResNet import resnet50
+        model = resnet50()
+        model.load_state_dict(torch.load(inference_log_dir))
     else:
         raise ValueError("Unknown model type")
 
@@ -57,60 +59,16 @@ def main():
     model = model.cuda(0)
     criterion = nn.CrossEntropyLoss().cuda(0)
 
-    if configs.hook == True:
-        hook_handle_list = hook.hardware_evaluation(
-            model, configs.wl_weight, configs.wl_activate, 
-            configs.subArray, configs.parallelRead, configs.net
-        )
-        model = hook.enable_hook(model)
-        
-    validate(val_loader, model, criterion, configs)        
-    
-    if configs.hook == True:
-        hook.remove_hook_list(hook_handle_list)
-        model = hook.disable_hook(model)
+    strip_group = hessian_trace(model, val_loader, criterion, configs)
+    strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
+    strip_bit_config = os.path.join('bit_config', strip_bit_config)
+    with open(strip_bit_config, 'w') as json_file:
+        json.dump(strip_group, json_file, indent=4)
 
-
-
-def validate(val_loader, model, criterion, configs):
-    batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, losses, top1, top5],
-        prefix='Test: ')
-
-    model.eval()
-
-    with torch.no_grad():
-        end = time.time()
-        for i, (images, target) in enumerate(val_loader):
-            images = images.cuda(0, non_blocking=True)
-            target = target.cuda(0, non_blocking=True)
-
-            # compute output
-            output = model(images)
-            loss = criterion(output, target)
-
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
-
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            if i % configs.print_freq == 0:
-                progress.display(i)
-
-        logging.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
-
-    return top1.avg
-
+def hessian_trace(model, val_loader, criterion, configs):
+    importances, strip_importances_per_layer = compute_strip_importances(model, val_loader, criterion)
+    strip_group = model_strip_group(model, importances, strip_importances_per_layer, configs.bits, configs.ratio)
+    return strip_group
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""

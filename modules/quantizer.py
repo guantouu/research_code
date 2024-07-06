@@ -27,9 +27,11 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     zero_pint: shift for quantization
     """
     # reshape scale and zeropoint for convolutional weights and activations
+    size = input.size()
     if len(input.shape) == 4:
-        scale = scale.view(-1, 1, 1, 1)
-        zero_point = zero_point.view(-1, 1, 1, 1)
+        input = input.view(-1, input.size(1))
+        scale = scale.view(-1, 1)
+        zero_point = zero_point.view(-1, 1)
     # reshape scale and zeropoint for linear weights
     elif len(input.shape) == 2:
         scale = scale.view(-1, 1)
@@ -40,12 +42,13 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     if inplace:
         input.mul_(1. / scale).add_(zero_point).round_()
         return input
-    return torch.round(1. / scale * input + zero_point)
-
+    quantize = (1. / scale * input).view(size)
+    return torch.round(quantize + zero_point)
+    
 def symmetric_linear_quantization_params(num_bits,
                                          saturation_min,
                                          saturation_max,
-                                         per_channel=False):
+                                         per_strip=False):
     """
     Compute the scaling factor and zeropoint with the given quantization range for symmetric quantization.
 
@@ -58,11 +61,16 @@ def symmetric_linear_quantization_params(num_bits,
 
     # these computation do not require any gradients, to enforce this, we use torch.no_grad()
     with torch.no_grad():
-        n = 2 ** (num_bits - 1) - 1
-        if per_channel:
+        if per_strip:
             scale, _ = torch.max(torch.stack([saturation_min.abs(), saturation_max.abs()], dim=1), dim=1)
+            if (scale.shape[0] == len(num_bits)):
+                n = [2 ** (bit - 1) - 1  for bit in num_bits]
+                n = torch.tensor(n).cuda(0)
+            else:
+                n = 2 ** (8 - 1) - 1 
             scale = torch.clamp(scale, min=1e-8) / n
         else:
+            n = 2 ** (num_bits - 1) - 1 
             scale = max(saturation_min.abs(), saturation_max.abs())
             scale = torch.clamp(scale, min=1e-8) / n
 
@@ -114,7 +122,6 @@ class SymmetricQuantFunction(Function):
         Note that the current implementation of SymmetricQuantFunction requires pre-calculated scaling factor.
         specified_scale: pre-calculated scaling factor for the tensor x
         """
-        n = 2 ** (k - 1) - 1
 
         if specified_scale is not None:
             scale = specified_scale
@@ -125,24 +132,39 @@ class SymmetricQuantFunction(Function):
 
         new_quant_x = linear_quantize(x, scale, zero_point, inplace=False)
 
-        new_quant_x = torch.clamp(new_quant_x, -n - 1, n)
+        x_size = new_quant_x.size()
+
+        if (isinstance(k, list)): 
+            new_quant_x = new_quant_x.view(-1, new_quant_x.size(1))
+            strip_quant_x = []
+            for i in range (new_quant_x.shape[0]):
+                n = 2 ** (k[i] - 1) - 1
+                strip_quant_x.append(torch.clamp(new_quant_x[i], -n - 1, n))
+            quant_x = torch.stack(strip_quant_x).view(x_size)
+        else:
+            n = 2 ** (k - 1) - 1
+            quant_x = torch.clamp(new_quant_x, -n - 1, n)
 
         ctx.scale = scale
-        return new_quant_x
+        return quant_x
 
     @staticmethod
     def backward(ctx, grad_output):
-
+        
         scale = ctx.scale
+        
+        output_size = grad_output.clone().shape
+        output = grad_output.clone()
         if len(grad_output.shape) == 4:
-            scale = scale.view(-1, 1, 1, 1)
+            output = output.view(-1, output.size(1))
+            scale = scale.view(-1, 1)
         # reshape scale and zeropoint for linear weights
         elif len(grad_output.shape) == 2:
             scale = scale.view(-1, 1)
         else:
             scale = scale.view(-1)
-
-        return grad_output.clone() / scale, None, None, None
+        result = (output / scale).view(output_size)
+        return result, None, None, None
 
 
 class AsymmetricQuantFunction(Function):

@@ -25,16 +25,16 @@ class QuantLinear(nn.Module):
     """
 
     def __init__(self,
-                 weight_bit=4,
-                 bias_bit=None,
+                 weight_bit=8,
+                 bias_bit=32,
                  quant_mode='symmetric',
-                 per_channel=False,
+                 per_strip=False,
                  weight_percentile=0,
                  ):
         super(QuantLinear, self).__init__()
         self.weight_bit = weight_bit
         self.quant_mode = quant_mode
-        self.per_channel = per_channel
+        self.per_strip = per_strip
         self.weight_percentile = weight_percentile
         self.bias_bit = bias_bit
         self.quantize_bias = (False if bias_bit is None else True)
@@ -59,13 +59,10 @@ class QuantLinear(nn.Module):
         except AttributeError:
             self.bias = None
 
-    def forward(self, x, prev_act_scaling_factor=None):
+    def forward(self, x):
         """
         using quantized weights to forward activation x
         """
-        if type(x) is tuple:
-            prev_act_scaling_factor = x[1]
-            x = x[0]
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply
@@ -77,7 +74,7 @@ class QuantLinear(nn.Module):
         w = self.weight
         w_transform = w.data.detach()
         # calculate the quantization range of weights and bias
-        if self.per_channel:
+        if self.per_strip:
             w_min, _ = torch.min(w_transform, dim=1, out=None)
             w_max, _ = torch.max(w_transform, dim=1, out=None)
             if self.quantize_bias:
@@ -93,17 +90,15 @@ class QuantLinear(nn.Module):
         # perform the quantization
         if self.quant_mode == 'symmetric':
             self.fc_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max,
-                                                                          self.per_channel)
+                                                                          self.per_strip)
             self.weight_integer = self.weight_function(self.weight, self.weight_bit, self.fc_scaling_factor)
 
-            bias_scaling_factor = self.fc_scaling_factor.view(1, -1) * prev_act_scaling_factor.view(1, -1)
+            bias_scaling_factor = self.fc_scaling_factor.view(1, -1)
             self.bias_integer = self.weight_function(self.bias, self.bias_bit, bias_scaling_factor)
         else:
             raise Exception('For weight, we only support symmetric quantization.')
 
-        prev_act_scaling_factor = prev_act_scaling_factor.view(1, -1)
-        x_int = x / prev_act_scaling_factor
         correct_output_scale = bias_scaling_factor[0].view(1, -1)
 
         return ste_round.apply(
-            F.linear(x_int, weight=self.weight_integer, bias=self.bias_integer)) * correct_output_scale
+            F.linear(x, weight=self.weight_integer, bias=self.bias_integer)) * correct_output_scale

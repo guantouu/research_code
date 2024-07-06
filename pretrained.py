@@ -1,8 +1,8 @@
 import os
-import sys
 import argparse
 import time
 import logging
+import json
 from datetime import datetime
 
 import numpy as np
@@ -11,9 +11,10 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
-from pytorchcv.model_provider import get_model as ptcv_get_model
 from utils.bit_config import bit_config_dict
 from utils.common_utils import process_config
+from utils import misc
+
 
 best_acc1 = 0
 
@@ -28,8 +29,9 @@ def main():
     net = configs.net
     inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, 'best.pth')
  
+    log_path = os.path.join(configs.logdir, configs.net, configs.dataset)
     logging.basicConfig(format='%(asctime)s - %(message)s',
-                        datefmt='%d-%b-%y %H:%M:%S', filename=configs.save_path + 'log.log')
+                        datefmt='%d-%b-%y %H:%M:%S', filename=log_path + '/log.log')
     logging.getLogger().setLevel(logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler())
 
@@ -46,12 +48,20 @@ def main():
         model = q_resnet50(pre_trained_model)
     else:
         raise ValueError("Unknown model type")
-                
+    
     #--------------------------------------------------------------------------------------------------
 
-    bit_config = bit_config_dict["bit_config_" + net + "_" + configs.quant_scheme]
-    name_counter = 0
+    if configs.strip_wise == True:
+        bit_config_path = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
+        bit_config_path = os.path.join('bit_config', bit_config_path)
+        with open(bit_config_path, 'r') as bit_config_file:
+            bit_config = json.load(bit_config_file)
+        print(bit_config_path)
+    else:
+        bit_config = bit_config_dict["bit_config_" + net + "_" + configs.quant_scheme]
 
+    #--------------------------------------------------------------------------------------------------
+    name_counter = 0
     for name, m in model.named_modules():
         if name in bit_config.keys():
             name_counter += 1
@@ -59,29 +69,12 @@ def main():
             setattr(m, 'bias_bit', configs.bias_bit)
             setattr(m, 'quantize_bias', (configs.bias_bit != 0))
             setattr(m, 'per_strip', configs.strip_wise)
-            setattr(m, 'act_percentile', configs.act_percentile)
-            setattr(m, 'act_range_momentum', configs.act_range_momentum)
-            setattr(m, 'checkpoint_iter_threshold', configs.checkpoint_iter)
-            setattr(m, 'save_path', configs.save_path)
-            setattr(m, 'fixed_point_quantization', configs.fixed_point_quantization)
 
-            if type(bit_config[name]) is tuple:
-                bitwidth = bit_config[name][0]
-                if bit_config[name][1] == 'hook':
-                    m.register_forward_hook(hook_fn_forward)
-                    global hook_keys
-                    hook_keys.append(name)
-            else:
-                bitwidth = bit_config[name]
-
-            if hasattr(m, 'activation_bit'):
-                setattr(m, 'activation_bit', bitwidth)
-                if bitwidth == 4:
-                    setattr(m, 'quant_mode', 'asymmetric')
-            else:
-                setattr(m, 'weight_bit', bitwidth)
+            bitwidth = bit_config[name]
+            setattr(m, 'weight_bit', bitwidth)
 
     #--------------------------------------------------------------------------------------------------
+
     torch.cuda.set_device(0)
     model = model.cuda(0)
 
@@ -134,7 +127,8 @@ def main():
 
         logging.info(f'Best acc at epoch {epoch}: {best_acc1}')
         if is_best:
-            best_epoch = epoch
+            file = os.path.join(log_path, f'saliency_{configs.ratio}.pth')
+            misc.model_save(model, file)
 
 def train(train_loader, model, criterion, optimizer, epoch, configs):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -175,7 +169,6 @@ def train(train_loader, model, criterion, optimizer, epoch, configs):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
         if i % configs.print_freq == 0:
             progress.display(i)
 

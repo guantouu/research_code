@@ -1,7 +1,5 @@
 import torch
 import numpy as np
-from modules.conv import QConv2d
-from modules.linear import QLinear
 
 def get_modules_list(model, known_modules):
     modules = []
@@ -10,15 +8,6 @@ def get_modules_list(model, known_modules):
         if classname in known_modules:
             modules.append(module)
     return modules
-
-def filter_indices(values, threshold):
-    indices = []
-    for idx, v in enumerate(values):
-        if v > threshold:
-            indices.append(idx)
-    if len(indices) <= 1:
-        indices = [0]
-    return indices
 
 def get_params_grad(model):
     params = []
@@ -30,35 +19,32 @@ def get_params_grad(model):
         grads.append(0. if param.grad is None else param.grad + 0.)
     return params, grads
 
-def enable_calibrate(model):
-    for name, child in model.named_children():
-        if isinstance(child, QConv2d) or isinstance(child, QLinear):
-            child.inference = False
-        else:
-            enable_calibrate(child)
-    return model
+def filter_indices(values, threshold):
+    indices = []
+    for idx, v in enumerate(values):
+        if v > threshold:
+            indices.append(idx)
+    if len(indices) <= 1:
+        indices = [0]
+    return indices
 
-def disable_calibrate(model):
-    for name, child in model.named_children():
-        if isinstance(child, QConv2d) or isinstance(child, QLinear):
-            child.inference = True
-        else:
-            disable_calibrate(child)
-    return model
+def simplify_attribute_path(attribute_path):
+    parts = attribute_path.split('.')
+    if(len(parts) == 4):
+        simplified_parts = [parts[1]]
+    elif(len(parts) == 5):
+        simplified_parts = [parts[1], parts[2], parts[3]]
+    else:
+        simplified_parts = [parts[1], parts[2], parts[4]]
+    simplified_path = '.'.join(simplified_parts)
+    
+    return simplified_path
 
-def enable_hessian_quantizer(model):
-    for name, child in model.named_children():
-        if isinstance(child, QConv2d):
-            child.modifyQuantizer()
-        else:
-            enable_hessian_quantizer(child)
-    return model
-
-def compute_strip_group(model, dataloader, criterion, device):
+def compute_strip_importances(model, dataloader, criterion):
     importances = {}
     strip_importances_per_layer = {}
-
-    known_modules = {'QConv2d'}
+    known_modules = {"Conv2d"}
+    
     modules = get_modules_list(model, known_modules)
 
     for m in model.parameters():
@@ -68,12 +54,12 @@ def compute_strip_group(model, dataloader, criterion, device):
         else:
             m.requires_grad = False
 
-    inputs, targets = next(iter(dataloader))
-    inputs, targets = inputs.to(device), targets.to(device)
-    model.to(device)
+    image, target = next(iter(dataloader))
+    image = image.cuda(0)
+    target = target.cuda(0)
     
-    outputs = model(inputs)
-    loss = criterion(outputs, targets)
+    output = model(image)
+    loss = criterion(output, target)
     loss.backward(create_graph = True)
 
     params, gradsH = get_params_grad(model)
@@ -85,11 +71,12 @@ def compute_strip_group(model, dataloader, criterion, device):
             trace_vhv[index].append([])
 
     for i in range(1):
-        v = [torch.randint_like(p, high = 2, device = device).float() * 2 - 1 for p in params]
+        v = [torch.randint_like(p, high = 2).float().cuda(0) * 2 - 1 for p in params]
 
-        THv = [torch.zeros(p.size()).to(device) for p in params]
+        THv = [torch.zeros(p.size()).cuda(0) for p in params]
+
         for inputs, targets in dataloader:
-            inputs, targets = inputs.to(device), targets.to(device)
+            inputs, targets = inputs.cuda(0), targets.cuda(0)
 
             model.zero_grad()
             outputs = model(inputs)
@@ -97,7 +84,7 @@ def compute_strip_group(model, dataloader, criterion, device):
             loss.backward(create_graph = True)
 
             params, gradsH = get_params_grad(model)
-            Hv = torch.autograd.grad(gradsH, params, grad_outputs = v, only_inputs = True, retain_graph = False)
+            Hv = torch.autograd.grad(gradsH, params, grad_outputs=v, only_inputs = True, retain_graph = False)
             THv = [THv1 + Hv1/float(len(dataloader)) + 0. for THv1, Hv1 in zip(THv, Hv)]
         Hv = THv
 
@@ -112,7 +99,7 @@ def compute_strip_group(model, dataloader, criterion, device):
                 for strip_Hv_i, strip_v_i in zip(strip_Hv, strip_v):
                     trace_vhv[Hv_i][strip_i].append(strip_Hv_i.flatten().dot(strip_v_i.flatten()).item())
                     strip_i += 1
-                            
+    
     for m in model.parameters():
         m.requires_grad = True
 
@@ -135,9 +122,10 @@ def compute_strip_group(model, dataloader, criterion, device):
     
     return importances, strip_importances_per_layer
 
+
 def model_strip_group(model, importances, strip_importances_per_layer, bits, ratio=0.9):
     all_importances = []
-    known_modules = {'QConv2d'}
+    known_modules = {'Conv2d'}
     modules = get_modules_list(model, known_modules)
     
     for m in modules:
@@ -156,18 +144,30 @@ def model_strip_group(model, importances, strip_importances_per_layer, bits, rat
     print('=> Conducting network pruning. Max: %.5f, Min: %.5f, Threshold: %.5f' %
         (max(all_importances), min(all_importances), threshold))
 
+    strip_group = {}
+    module_to_name = {}
+    for name, module in model.named_modules():
+        classname = module.__class__.__name__
+        if classname not in known_modules:
+            continue
+        module_name = simplify_attribute_path(name)
+        module_to_name[module] = module_name
+
     for module in model.modules():
         classname = module.__class__.__name__
         if classname not in known_modules:
             continue
         strip_group_per_layer = [0] * len(strip_importances_per_layer[module])
+        module_name = module_to_name.get(module, None)
+        strip_group[module_name] = []
         for k in range(0, len(strip_importances_per_layer[module])):
             if strip_importances_per_layer[module][k] > threshold:
                 strip_group_per_layer[k] = bits['highly_sensitive']
+                strip_group[module_name].append(bits['highly_sensitive'])
             else:
                 strip_group_per_layer[k] = bits['insensitive']
-        module.weight_quantizer.sensitive = strip_group_per_layer
+                strip_group[module_name].append(bits['insensitive'])
         print("low bit:{}".format(strip_group_per_layer.count(bits['insensitive'])))
         print("heighly bit:{}".format(strip_group_per_layer.count(bits['highly_sensitive'])))
     
-    return model
+    return strip_group

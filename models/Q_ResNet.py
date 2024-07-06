@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from modules.act import QuantAct
 from modules.linear import QuantLinear
 from modules.pool import QuantAdaptiveAvgPool2d
 from modules.conv import QuantBnConv2d
@@ -9,57 +8,56 @@ from modules.conv import QuantBnConv2d
 class Q_ResNet50(nn.Module):
     def __init__(self, model):
         super().__init__()
-
-        features = getattr(model, 'features')
-        init_block = getattr(features, 'init_block')
-
-        self.quant_input = QuantAct()
-        self.quant_init_convbn = QuantBnConv2d()
-        self.quant_init_convbn.set_param(init_block.conv.conv, init_block.conv.bn)
-
-        self.quant_act_int32 = QuantAct()
-
+        
+        self.init_block = QuantBnConv2d()
         self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.act = nn.ReLU()
 
         self.channel = [3, 4, 6, 3]
 
         for stage_num in range(0, 4):
-            stage = getattr(features, "stage{}".format(stage_num + 1))
             for unit_num in range(0, self.channel[stage_num]):
-                unit = getattr(stage, "unit{}".format(unit_num + 1))
                 quant_unit = Q_ResUnitBn()
-                quant_unit.set_param(unit)
                 setattr(self, f"stage{stage_num + 1}.unit{unit_num + 1}", quant_unit)
 
         self.final_pool = QuantAdaptiveAvgPool2d((1, 1))
-
-        self.quant_act_output = QuantAct()
-
-        output = getattr(model, 'output')
         self.quant_output = QuantLinear()
-        self.quant_output.set_param(output)
+        
+        if model != None:
+            features = getattr(model, 'features')
+            origin_init_block = getattr(features, 'init_block')
+            self.init_block.set_param(origin_init_block.conv.conv, origin_init_block.conv.bn)
+
+            for stage_num in range(0, 4):
+                stage = getattr(features, "stage{}".format(stage_num + 1))
+                for unit_num in range(0, self.channel[stage_num]):
+                    unit = getattr(stage, "unit{}".format(unit_num + 1))
+                    quant_unit = Q_ResUnitBn()
+                    quant_unit.set_param(unit)
+                    setattr(self, f"stage{stage_num + 1}.unit{unit_num + 1}", quant_unit)
+
+            output = getattr(model, 'output')
+            self.quant_output.set_param(output)
+
+
+
 
     def forward(self, x):
-        x, act_scaling_factor = self.quant_input(x)
-
-        x, weight_scaling_factor = self.quant_init_convbn(x, act_scaling_factor)
+        x = self.init_block(x)
 
         x = self.pool(x)
-        x, act_scaling_factor = self.quant_act_int32(x, act_scaling_factor, weight_scaling_factor, None, None)
 
         x = self.act(x)
 
         for stage_num in range(0, 4):
             for unit_num in range(0, self.channel[stage_num]):
                 tmp_func = getattr(self, f"stage{stage_num+1}.unit{unit_num+1}")
-                x, act_scaling_factor = tmp_func(x, act_scaling_factor)
+                x = tmp_func(x)
 
-        x = self.final_pool(x, act_scaling_factor)
+        x = self.final_pool(x)
 
-        x, act_scaling_factor = self.quant_act_output(x, act_scaling_factor)
         x = x.view(x.size(0), -1)
-        x = self.quant_output(x, act_scaling_factor)
+        x = self.quant_output(x)
 
         return x
 
@@ -73,60 +71,44 @@ class Q_ResUnitBn(nn.Module):
     def set_param(self, unit):
         self.resize_identity = unit.resize_identity
 
-        self.quant_act = QuantAct()
-
         convbn1 = unit.body.conv1
-        self.quant_convbn1 = QuantBnConv2d()
-        self.quant_convbn1.set_param(convbn1.conv, convbn1.bn)
-        self.quant_act1 = QuantAct()
+        self.conv1 = QuantBnConv2d()
+        self.conv1.set_param(convbn1.conv, convbn1.bn)
 
         convbn2 = unit.body.conv2
-        self.quant_convbn2 = QuantBnConv2d()
-        self.quant_convbn2.set_param(convbn2.conv, convbn2.bn)
-        self.quant_act2 = QuantAct()
+        self.conv2 = QuantBnConv2d()
+        self.conv2.set_param(convbn2.conv, convbn2.bn)
 
         convbn3 = unit.body.conv3
-        self.quant_convbn3 = QuantBnConv2d()
-        self.quant_convbn3.set_param(convbn3.conv, convbn3.bn)
+        self.conv3 = QuantBnConv2d()
+        self.conv3.set_param(convbn3.conv, convbn3.bn)
 
         if self.resize_identity:
-            self.quant_identity_convbn = QuantBnConv2d()
-            self.quant_identity_convbn.set_param(unit.identity_conv.conv, unit.identity_conv.bn)
-
-        self.quant_act_int32 = QuantAct()
+            self.identity_conv = QuantBnConv2d()
+            self.identity_conv.set_param(unit.identity_conv.conv, unit.identity_conv.bn)
 
     def forward(self, x, scaling_factor_int32=None):
         # forward using the quantized modules
         if self.resize_identity:
-            x, act_scaling_factor = self.quant_act(x, scaling_factor_int32)
-            identity_act_scaling_factor = act_scaling_factor.clone()
-            identity, identity_weight_scaling_factor = self.quant_identity_convbn(x, act_scaling_factor)
+            identity = self.identity_conv(x)
         else:
             identity = x
-            x, act_scaling_factor = self.quant_act(x, scaling_factor_int32)
 
-        x, weight_scaling_factor = self.quant_convbn1(x, act_scaling_factor)
+        x = self.conv1(x)
         x = nn.ReLU()(x)
-        x, act_scaling_factor = self.quant_act1(x, act_scaling_factor, weight_scaling_factor)
 
-        x, weight_scaling_factor = self.quant_convbn2(x, act_scaling_factor)
+        x = self.conv2(x)
         x = nn.ReLU()(x)
-        x, act_scaling_factor = self.quant_act2(x, act_scaling_factor, weight_scaling_factor)
 
-        x, weight_scaling_factor = self.quant_convbn3(x, act_scaling_factor)
+        x = self.conv3(x)
 
         x = x + identity
 
-        if self.resize_identity:
-            x, act_scaling_factor = self.quant_act_int32(x, act_scaling_factor, weight_scaling_factor, identity, identity_act_scaling_factor, identity_weight_scaling_factor)
-        else:
-            x, act_scaling_factor = self.quant_act_int32(x, act_scaling_factor, weight_scaling_factor, identity, scaling_factor_int32, None)
-
         x = nn.ReLU()(x)
 
-        return x, act_scaling_factor
+        return x
 
 
-def q_resnet50(model):
+def q_resnet50(model=None):
     net = Q_ResNet50(model)
     return net

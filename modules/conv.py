@@ -3,7 +3,6 @@ import torch.nn as nn
 from modules.quantizer import SymmetricQuantFunction, AsymmetricQuantFunction, symmetric_linear_quantization_params
 import torch.nn.functional as F
 
-
 class QuantBnConv2d(nn.Module):
     """
     Class to quantize given convolutional layer weights, with support for both folded BN and separate BN.
@@ -43,7 +42,6 @@ class QuantBnConv2d(nn.Module):
         self.quant_mode = quant_mode
         self.counter = 1
 
-
     def set_param(self, conv, bn):
         self.out_channels = conv.out_channels
         self.register_buffer('convbn_scaling_factor', torch.zeros(self.out_channels))
@@ -64,7 +62,6 @@ class QuantBnConv2d(nn.Module):
         """
         x: the input activation
         pre_act_scaling_factor: the scaling factor of the previous activation quantization layer
-
         """
         if type(x) is tuple:
             pre_act_scaling_factor = x[1]
@@ -77,7 +74,6 @@ class QuantBnConv2d(nn.Module):
         else:
             raise ValueError("unknown quant mode: {}".format(self.quant_mode))
 
-
         running_std = torch.sqrt(self.bn.running_var.detach() + self.bn.eps)
         scale_factor = self.bn.weight / running_std
         scaled_weight = self.conv.weight * scale_factor.reshape([self.conv.out_channels, 1, 1, 1])
@@ -89,30 +85,34 @@ class QuantBnConv2d(nn.Module):
         scaled_bias = (scaled_bias - self.bn.running_mean.detach()) * scale_factor + self.bn.bias
 
         if self.per_strip:
+            w_permute = scaled_weight.data.permute(1, 0, 2, 3)
+            strip_w_transform = w_permute.contiguous().view(self.conv.in_channels, -1).transpose(0, 1)
+            w_min = strip_w_transform.min(dim=1).values
+            w_max = strip_w_transform.max(dim=1).values
+
             w_transform = scaled_weight.data.contiguous().view(self.conv.out_channels, -1)
-            w_min = w_transform.min(dim=1).values
-            w_max = w_transform.max(dim=1).values
+            bias_w_min = w_transform.min(dim=1).values
+            bias_w_max = w_transform.max(dim=1).values
+
         else:
             w_min = scaled_weight.data.min()
             w_max = scaled_weight.data.max()
+            bias_w_min = w_min
+            bias_w_max = w_max
 
         if self.quant_mode == 'symmetric':
-            self.convbn_scaling_factor = symmetric_linear_quantization_params(self.weight_bit,
-                                                                              w_min, w_max, self.per_strip)
-            self.weight_integer = self.weight_function(scaled_weight, self.weight_bit,
-                                                       self.convbn_scaling_factor)
+            self.convbn_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max, self.per_strip)
+            self.convbn_bias_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, bias_w_min, bias_w_max, self.per_strip)
+            self.weight_integer = self.weight_function(scaled_weight, self.weight_bit, self.convbn_scaling_factor)            
             if self.quantize_bias:
-                bias_scaling_factor = self.convbn_scaling_factor.view(1, -1) * pre_act_scaling_factor.view(1,
-                                                                                                           -1)
+                bias_scaling_factor = self.convbn_bias_scaling_factor.view(1, -1)
                 self.bias_integer = self.weight_function(scaled_bias, self.bias_bit, bias_scaling_factor)
             self.convbn_scaled_bias = scaled_bias
         else:
             raise Exception('For weight, we only support symmetric quantization.')
 
-        pre_act_scaling_factor = pre_act_scaling_factor.view(1, -1, 1, 1)
-        x_int = x / pre_act_scaling_factor
         correct_output_scale = bias_scaling_factor.view(1, -1, 1, 1)
 
-        return (F.conv2d(x_int, self.weight_integer, self.bias_integer, self.conv.stride, self.conv.padding,
-                         self.conv.dilation, self.conv.groups) * correct_output_scale, self.convbn_scaling_factor)
+        return F.conv2d(x, self.weight_integer, self.bias_integer, self.conv.stride, self.conv.padding,
+                         self.conv.dilation, self.conv.groups) * correct_output_scale
 

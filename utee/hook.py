@@ -2,9 +2,7 @@ import os
 import torch.nn as nn
 import numpy as np
 import torch
-from modules.conv import QConv2d
-from modules.linear import QLinear
-from modules.quantizer import MixedPrecisionQuantizer
+from modules.conv import QuantBnConv2d
 
 def Neural_Sim(self, input, output): 
     global model_n
@@ -111,7 +109,8 @@ def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead,
     f.write('./NeuroSIM/main ./NeuroSIM/NetWork_'+str(model_name)+'.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
     
     for i, layer in enumerate(model.modules()):
-        if isinstance(layer, (QConv2d)) or isinstance(layer, QLinear):
+        if isinstance(layer, QuantBnConv2d):
+            print(i)
             hook_handle_list.append(layer.register_forward_hook(Neural_Sim))
     return hook_handle_list
 
