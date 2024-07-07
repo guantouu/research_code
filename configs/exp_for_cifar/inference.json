@@ -1,15 +1,14 @@
 {
     "exp_name": "strip_wise_hessian_trace",
-    "net": "resnet50",
-    "dataset": "cifar100",
+    "net": "resnet18",
+    "dataset": "cifar10",
     "logdir": "/app/log",
     "data": "/data/",
     "batch_size": 128,
     "ratio": 0.1,
     "print_freq": 10,
-    "hook": false,
     "wl_weight": 8,
     "wl_activate": 8,
-    "subArray": 16,
-    "parallelRead": 128
+    "subArray": 64,
+    "parallelRead": 64
 }

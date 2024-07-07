@@ -292,32 +292,9 @@ def get_resnet(blocks,
                width_scale=1.0,
                model_name=None,
                root=os.path.join("~", ".torch", "models"),
+                num_classes=10,
                **kwargs):
-    """
-    Create ResNet model with specific parameters.
 
-    Parameters
-    ----------
-    blocks : int
-        Number of blocks.
-    bottleneck : bool, default None
-        Whether to use a bottleneck or simple block in units.
-    conv1_stride : bool, default True
-        Whether to use stride in the first or the second convolution layer in units.
-    width_scale : float, default 1.0
-        Scale factor for width of layers.
-    model_name : str or None, default None
-        Model name for loading pretrained model.
-    pretrained : bool, default False
-        Whether to load the pretrained weights for model.
-    root : str, default '~/.torch/models'
-        Location for keeping the model parameters.
-
-    Returns
-    -------
-    nn.Module
-        Desired module.
-    """
     if bottleneck is None:
         bottleneck = (blocks >= 50)
 
@@ -376,30 +353,23 @@ def get_resnet(blocks,
         init_block_channels=init_block_channels,
         bottleneck=bottleneck,
         conv1_stride=conv1_stride,
+        num_classes=num_classes,
         **kwargs)
 
     return net
 
+def resnet18(num_classes=10, **kwargs):
+    return get_resnet(
+        blocks=18,
+        model_name="resnet18",
+        num_classes=num_classes,
+        **kwargs)
 
-def resnet50(**kwargs):
-    """
-    ResNet-50 model from 'Deep Residual Learning for Image Recognition,' https://arxiv.org/abs/1512.03385.
-
-    Parameters
-    ----------
-    pretrained : bool, default False
-        Whether to load the pretrained weights for model.
-    root : str, default '~/.torch/models'
-        Location for keeping the model parameters.
-
-    Returns
-    -------
-    nn.Module
-        Desired module.
-    """
+def resnet50(num_classes=10, **kwargs):
     return get_resnet(
         blocks=50,
         model_name="resnet50",
+        num_classes=num_classes,
         **kwargs)
 
 

@@ -200,8 +200,8 @@ Param::Param() {
 
 	outputtoggle = 0.5; // output bit toggling has a negligible portion of the interconnect energy. Set it to 50 % for simpliciity and generalizability for all neural network workloads.
 
-	numRowSubArray = 128;               // # of rows in single subArray
-	numColSubArray = 128;               // # of columns in single subArray
+	numRowSubArray = 64;               // # of rows in single subArray
+	numColSubArray = 64;               // # of columns in single subArray
 
 	// 230920 update
 

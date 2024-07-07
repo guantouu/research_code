@@ -33,7 +33,8 @@ class QuantBnConv2d(nn.Module):
                  weight_bit=4,
                  bias_bit=None,
                  quant_mode="symmetric",
-                 per_strip=False):
+                 per_strip=False,
+                 name=None):
         super(QuantBnConv2d, self).__init__()
         self.weight_bit = weight_bit
         self.per_strip = per_strip
@@ -41,6 +42,7 @@ class QuantBnConv2d(nn.Module):
         self.quantize_bias = False if bias_bit is None else True
         self.quant_mode = quant_mode
         self.counter = 1
+        self.name = name
 
     def set_param(self, conv, bn):
         self.out_channels = conv.out_channels
@@ -54,7 +56,7 @@ class QuantBnConv2d(nn.Module):
 
     def __repr__(self):
         conv_s = super(QuantBnConv2d, self).__repr__()
-        s = "({0}, weight_bit={1}, bias_bit={2}, groups={3}, wt-strip-wise={4}, quant_mode={6})".format(
+        s = "({0}, weight_bit={1}, bias_bit={2}, groups={3}, wt-strip-wise={4}, quant_mode={5})".format(
             conv_s, self.weight_bit, self.bias_bit, self.conv.groups, self.per_strip, self.quant_mode)
         return s
 

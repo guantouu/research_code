@@ -9,8 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-
+from models import dataset
 from utils.bit_config import bit_config_dict
 from utils.common_utils import process_config
 from utils import misc
@@ -21,7 +20,7 @@ best_acc1 = 0
 def main():
     global best_acc1
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/training.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/fine_tuning.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')
@@ -38,8 +37,25 @@ def main():
     logging.info(configs)
 
     current_time = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-    
-    if net == 'resnet50':
+
+    #--------------------------------------------------------------------------------------------------
+    if configs.dataset == 'cifar10':
+        train_loader, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
+        num_classes=10
+    elif configs.dataset == 'cifar100':
+        train_loader, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
+        num_classes=100
+    else:
+        raise ValueError("Unknown dataset type")
+    #--------------------------------------------------------------------------------------------------
+    if net == 'resnet18':
+        from models.ResNet import resnet18
+        pre_trained_model = resnet18()
+        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
+
+        from models.Q_ResNet import q_resnet18
+        model = q_resnet18(pre_trained_model)
+    elif net == 'resnet50':
         from models.ResNet import resnet50
         pre_trained_model = resnet50()
         pre_trained_model.load_state_dict(torch.load(inference_log_dir))
@@ -48,7 +64,6 @@ def main():
         model = q_resnet50(pre_trained_model)
     else:
         raise ValueError("Unknown model type")
-    
     #--------------------------------------------------------------------------------------------------
 
     if configs.strip_wise == True:
@@ -70,6 +85,8 @@ def main():
             setattr(m, 'quantize_bias', (configs.bias_bit != 0))
             setattr(m, 'per_strip', configs.strip_wise)
 
+            setattr(m, 'name', f"Conv_{name_counter}")
+
             bitwidth = bit_config[name]
             setattr(m, 'weight_bit', bitwidth)
 
@@ -84,34 +101,6 @@ def main():
                                 momentum=configs.momentum,
                                 weight_decay=configs.weight_decay)
 
-    #--------------------------------------------------------------------------------------------------
-    data_root = os.path.expanduser(os.path.join(configs.data, 'cifar100-data'))
-    train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR100(
-            root=data_root, train=True, download=True,
-            transform=transforms.Compose([
-                transforms.Pad(4),
-                transforms.RandomCrop(32),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.5070751592371323, 0.48654887331495095, 0.4409178433670343), 
-                    (0.2673342858792401, 0.2564384629170883, 0.27615047132568404)
-                ),
-            ])),
-        batch_size=configs.batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR100(
-            root=data_root, train=False, download=True,
-            transform=transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.5070751592371323, 0.48654887331495095, 0.4409178433670343), 
-                    (0.2673342858792401, 0.2564384629170883, 0.27615047132568404)
-                ),
-            ])),
-        batch_size=configs.batch_size, shuffle=True)
-    #--------------------------------------------------------------------------------------------------
 
     best_epoch = 0
     for epoch in range(configs.epochs):

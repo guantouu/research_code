@@ -5,12 +5,11 @@ import logging
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 from utils.common_utils import process_config
 from datetime import datetime
 from utils.strip_utils import compute_strip_importances, model_strip_group
 import json
-
+from models import dataset
 
 def main():
     parser = argparse.ArgumentParser()
@@ -31,27 +30,26 @@ def main():
     inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, 'best.pth')
     net = configs.net
 
-    if net == 'resnet50':
+    #--------------------------------------------------------------------------------------------------
+    if configs.dataset == 'cifar10':
+        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
+        num_classes=10
+    elif configs.dataset == 'cifar100':
+        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
+        num_classes=100
+    else:
+        raise ValueError("Unknown dataset type")
+    #--------------------------------------------------------------------------------------------------
+    if net == 'resnet18':
+        from models.ResNet import resnet18
+        model = resnet18(num_classes)
+        model.load_state_dict(torch.load(inference_log_dir))    
+    elif net == 'resnet50':
         from models.ResNet import resnet50
-        model = resnet50()
+        model = resnet50(num_classes)
         model.load_state_dict(torch.load(inference_log_dir))
     else:
         raise ValueError("Unknown model type")
-
-    #--------------------------------------------------------------------------------------------------
-    data_root = os.path.expanduser(os.path.join(configs.data, 'cifar100-data'))
-    val_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR100(
-            root=data_root, train=False, download=True,
-            transform=transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    (0.5070751592371323, 0.48654887331495095, 0.4409178433670343), 
-                    (0.2673342858792401, 0.2564384629170883, 0.27615047132568404)
-                ),
-            ])),
-        batch_size=configs.batch_size, shuffle=True)
-    #--------------------------------------------------------------------------------------------------
 
     t_begin = time.time()
 
@@ -65,10 +63,51 @@ def main():
     with open(strip_bit_config, 'w') as json_file:
         json.dump(strip_group, json_file, indent=4)
 
+    validate(val_loader, model, criterion, configs)
+
 def hessian_trace(model, val_loader, criterion, configs):
     importances, strip_importances_per_layer = compute_strip_importances(model, val_loader, criterion)
     strip_group = model_strip_group(model, importances, strip_importances_per_layer, configs.bits, configs.ratio)
     return strip_group
+
+def validate(val_loader, model, criterion, configs):
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(
+        len(val_loader),
+        [batch_time, losses, top1, top5],
+        prefix='Test: ')
+
+    model.eval()
+
+    with torch.no_grad():
+        end = time.time()
+        for i, (images, target) in enumerate(val_loader):
+            images = images.cuda(0, non_blocking=True)
+            target = target.cuda(0, non_blocking=True)
+
+            # compute output
+            output = model(images)
+            loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), images.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % configs.print_freq == 0:
+                progress.display(i)
+
+        logging.info(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
+
+    return top1.avg
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""

@@ -6,49 +6,52 @@ from modules.conv import QuantBnConv2d
 
 def Neural_Sim(self, input, output): 
     global model_n
+    global wl_input 
 
-    print("quantize layer ", self.name)
-    input_file_name =  './layer_record_' + str(model_n) + '/input' + str(self.name) + '.csv'
-    weight_file_name =  './layer_record_' + str(model_n) + '/weight' + str(self.name) + '.csv'
+    print(self.name)
+    print("input shape", input[0].shape)
+
+    input_file_name =  './layer_record_' + str(model_n) + '/input_' + str(self.name) + '.csv'
+    weight_file_name =  './layer_record_' + str(model_n) + '/weight_' + str(self.name) + '.csv'
     f = open('./layer_record_' + str(model_n) + '/trace_command.sh', "a")
     f.write(weight_file_name+' '+input_file_name+' ')
 
-    weight_q = self.weight_quantizer(self.weight)
+    weight_q = self.weight_integer
     write_matrix_weight(weight_q.cpu().data.numpy(),weight_file_name)
 
-    if len(self.weight.shape) > 2:
-        k=self.weight.shape[-1]
-        padding = self.padding
-        stride = self.stride
+    print(weight_q.shape)
 
-        tensor = stretch_input(input[0].cpu().data.numpy(), k,padding ,stride)
-        write_matrix_activation_conv(tensor, None, self.wl_input, input_file_name)
+    if len(weight_q.shape) > 2:
+        k = weight_q.shape[-1]
+        padding = self.conv.padding
+        stride = self.conv.stride
+
+        tensor = stretch_input(input[0].cpu().data.numpy(), k, padding, stride)
+        write_matrix_activation_conv(tensor, None, wl_input, input_file_name)
     
     else:
-        write_matrix_activation_fc(input[0].cpu().data.numpy(), None, self.wl_input, input_file_name)
+        write_matrix_activation_fc(input[0].cpu().data.numpy(), None, wl_input, input_file_name)
 
-def write_matrix_weight(input_matrix,filename):
+def write_matrix_weight(input_matrix, filename):
     cout = input_matrix.shape[0]
     weight_matrix = input_matrix.reshape(cout,-1).transpose()
     np.savetxt(filename, weight_matrix, delimiter=",",fmt='%10.5f')
 
-def write_matrix_activation_conv(input_matrix,fill_dimension,length,filename):
+def write_matrix_activation_conv(input_matrix, fill_dimension, length,filename):
     filled_matrix_b = np.zeros([input_matrix.shape[2],input_matrix.shape[1]*length],dtype=str)
     filled_matrix_bin,scale = dec2bin(input_matrix[0,:],length)
     for i,b in enumerate(filled_matrix_bin):
         filled_matrix_b[:,i::length] =  b.transpose()
     np.savetxt(filename, filled_matrix_b, delimiter=",",fmt='%s')
 
-
-def write_matrix_activation_fc(input_matrix,fill_dimension,length,filename):
-
+def write_matrix_activation_fc(input_matrix, fill_dimension, length,filename):
     filled_matrix_b = np.zeros([input_matrix.shape[1],length],dtype=str)
     filled_matrix_bin,scale = dec2bin(input_matrix[0,:],length)
     for i,b in enumerate(filled_matrix_bin):
         filled_matrix_b[:,i] =  b
     np.savetxt(filename, filled_matrix_b, delimiter=",",fmt='%s')
 
-def stretch_input(input_matrix,window_size = 5,padding=(0,0),stride=(1,1)):
+def stretch_input(input_matrix, window_size=5, padding=(0,0),stride=(1,1)):
     input_shape = input_matrix.shape
     output_shape_row = int((input_shape[2] + 2*padding[0] -window_size) / stride[0] + 1)
     output_shape_col = int((input_shape[3] + 2*padding[1] -window_size) / stride[1] + 1)
@@ -98,7 +101,9 @@ def remove_hook_list(hook_handle_list):
 
 def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead, model_name): 
     global model_n
+    global wl_input
     model_n = model_name
+    wl_input = 8
     
     hook_handle_list = []
     if not os.path.exists('./layer_record_'+str(model_name)):
@@ -108,9 +113,8 @@ def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead,
     f = open('./layer_record_'+str(model_name)+'/trace_command.sh', "w")
     f.write('./NeuroSIM/main ./NeuroSIM/NetWork_'+str(model_name)+'.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
     
-    for i, layer in enumerate(model.modules()):
+    for name, layer in model.named_modules():
         if isinstance(layer, QuantBnConv2d):
-            print(i)
             hook_handle_list.append(layer.register_forward_hook(Neural_Sim))
     return hook_handle_list
 
