@@ -58,7 +58,7 @@ Param::Param() {
 	operationmode = 2;     		// 1: conventionalSequential (Use several multi-bit RRAM as one synapse)
 								// 2: conventionalParallel (Use several multi-bit RRAM as one synapse)
 
-	memcelltype = 1;        	// 1: cell.memCellType = Type::SRAM
+	memcelltype = 2;        	// 1: cell.memCellType = Type::SRAM
 								// 2: cell.memCellType = Type::RRAM
 								// 3: cell.memCellType = Type::FeFET
 	
@@ -73,7 +73,7 @@ Param::Param() {
 								// 2: inputParameter.deviceRoadmap = LSTP
 								
 	// Anni update
-	globalBusType = false;		// false: X-Y Bus
+	globalBusType = true;		// false: X-Y Bus
 								// true: H-Tree
 								
 	globalBufferType = false;    // false: register file
@@ -100,7 +100,7 @@ Param::Param() {
 								
 	SARADC = false;              // false: MLSA
 	                            // true: sar ADC
-	currentMode = true;         // false: MLSA use VSA
+	currentMode = true;         // false:  
 	                            // true: MLSA use CSA
 	
 	pipeline = true;            // false: layer-by-layer process --> huge leakage energy in HP
@@ -200,7 +200,7 @@ Param::Param() {
 
 	outputtoggle = 0.5; // output bit toggling has a negligible portion of the interconnect energy. Set it to 50 % for simpliciity and generalizability for all neural network workloads.
 
-	numRowSubArray = 64;               // # of rows in single subArray
+	numRowSubArray = 0;               // # of rows in single subArray
 	numColSubArray = 64;               // # of columns in single subArray
 
 	// 230920 update
@@ -246,7 +246,7 @@ Param::Param() {
 	relaxArrayCellHeight = 0;           // relax ArrayCellHeight or not
 	relaxArrayCellWidth = 0;            // relax ArrayCellWidth or not
 
-	numColMuxed = 6;                    // How many columns share 1 ADC (for eNVM and FeFET) or parallel SRAM
+	// numColMuxed = 2;                    // How many columns share 1 ADC (for eNVM and FeFET) or parallel SRAM
 	
 	// 1.4 update: handle the exception for conventionalsequential case
 	// 1.4 update 230615
@@ -255,12 +255,12 @@ Param::Param() {
 	numColMuxed=numColPerSynapse;
 	}
 	
-	levelOutput = 32;                   // # of levels of the multilevelSenseAmp output, should be in 2^N forms; e.g. 32 levels --> 5-bit ADC
-	cellBit = 1;                        // precision of memory device 
+	// levelOutput = 16;                   // # of levels of the multilevelSenseAmp output, should be in 2^N forms; e.g. 32 levels --> 5-bit ADC
+	cellBit = 2;                        // precision of memory device 
 	// 1.4 update: dummy column sharing - how many senseamplfiers share one dummny columns?
 	// dummy column sharing should not be high, since it could change the column cap of the dummy column.
 	// In order for the dummy column to serve as a reference, the column caps of the dummy & main column should be matched closely
-	dumcolshared = levelOutput;
+	dumcolshared = 1;
 
 	/*** parameters for SRAM ***/
 	// due the scaling, suggested SRAM cell size above 22nm: 160F^2
