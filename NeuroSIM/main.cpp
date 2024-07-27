@@ -74,9 +74,9 @@ int main(int argc, char * argv[]) {
     param->numRowSubArray = atoi(argv[4]);             // number row of subarray
     param->numRowParallel = atoi(argv[5]);             // number of enabled rows of subarray (partial paralle mode)
 
-    param->synapseBit = 4;
-    param->numColMuxed = 2;
-    param->levelOutput = 16;
+    param->synapseBit = 8;
+    param->numColMuxed = 4;
+    param->levelOutput = 256;
 
     /*** initialize operationMode as default ***/
     param->conventionalParallel = 1;

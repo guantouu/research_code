@@ -167,7 +167,9 @@ def model_strip_group(model, importances, strip_importances_per_layer, bits, rat
             else:
                 strip_group_per_layer[k] = bits['insensitive']
                 strip_group[module_name].append(bits['insensitive'])
-        print("low bit:{}".format(strip_group_per_layer.count(bits['insensitive'])))
-        print("heighly bit:{}".format(strip_group_per_layer.count(bits['highly_sensitive'])))
+        print("heighly/low bit :{}/{}".format(
+            strip_group_per_layer.count(bits['highly_sensitive']),
+            strip_group_per_layer.count(bits['insensitive']) 
+        ))
     
     return strip_group

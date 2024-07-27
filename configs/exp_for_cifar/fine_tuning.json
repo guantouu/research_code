@@ -2,7 +2,6 @@
     "exp_name": "model training",
     "dataset": "cifar10",
     "net": "resnet18",
-    "quant_scheme": "",
     "quant_mode": "symmetric",
     "bias_bit": 32,
     "strip_wise": true,
@@ -16,5 +15,5 @@
     "data": "/data/",
     "data_percentage":0.1,
     "logdir": "/app/log/",
-    "ratio": 0.5
+    "ratio": 0.7
 }

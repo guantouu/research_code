@@ -25,7 +25,10 @@ def Neural_Sim(self, input, output):
 
     bit_8_matrix = []
     bit_4_matrix = []
-
+    
+    input_size = input[0].shape
+    padding = self.conv.padding
+    stride = self.conv.stride
     
     if bit_type == '4_bit' or bit_type == '8_bit':
         input_reshape = weight_q.cpu().data.numpy().reshape(-1, in_channels)
@@ -52,18 +55,16 @@ def Neural_Sim(self, input, output):
             else:
                 out_channels = 0
                 np.savetxt(weight_file_name, np.array([0.0000]), delimiter=",",fmt='%10.5f')
+        layer_info.append([input_size[2], input_size[3], input_size[1], 1, 1, out_channels, 0, stride[0]])
     else:
         input_reshape = weight_q.cpu().data.numpy()
         write_matrix_weight(input_reshape, weight_file_name)
-
-    padding = self.conv.padding
-    stride = self.conv.stride
+        layer_info.append([input_size[2], input_size[3], input_size[1],  k_size, k_size, out_channels, 0, stride[0]])
 
     tensor = stretch_input(input[0].cpu().data.numpy(), k_size, padding, stride)
     write_matrix_activation_conv(tensor, None, wl_input, input_file_name)
 
-    input_size = input[0].shape
-    layer_info.append([input_size[2], input_size[3], input_size[1], k_size, k_size, out_channels, 0, stride[0]])
+
 
 def write_matrix_weight(input_matrix, filename):
     cout = input_matrix.shape[0]
@@ -76,7 +77,7 @@ def process_matrix(matrix_list, k_size, in_channels):
         matrix_list = matrix_list[:-remainder]
     
     if len(matrix_list) != 0:
-        matrix_reshaped = np.vstack(matrix_list).reshape(-1, in_channels, k_size, k_size)
+        matrix_reshaped = np.vstack(matrix_list)
         return matrix_reshaped
     else:
         return []
