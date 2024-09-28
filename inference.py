@@ -44,9 +44,24 @@ def main():
     elif net == "resnet50":
         from models.Q_ResNet import q_resnet50
         model = torch.load(inference_log_dir)
+    elif net == "vgg19":
+        from models.vgg import VGG
+        checkpoint = torch.load(inference_log_dir)
+        model = VGG()  # 假設你有對應的 VGG19 初始化代碼
+        checkpoint['net'] = checkpoint['net'].module
+        pretrained_dict = checkpoint['net'].state_dict()
+
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and model_dict[k].size() == v.size()}
+
+        model_dict.update(pretrained_dict)
+
+        model.load_state_dict(model_dict)
     else:
         raise ValueError("Unknown model type")
     #--------------------------------------------------------------------------------------------------
+
+
 
     t_begin = time.time()
 

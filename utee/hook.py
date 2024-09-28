@@ -5,7 +5,7 @@ import torch
 import math
 import csv
 from modules.conv import QuantBnConv2d
-bit_type = '4_bit'
+bit_type = '8_bit'
 
 def Neural_Sim(self, input, output): 
     global model_n
@@ -164,7 +164,7 @@ def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead,
     f.write('./NeuroSIM/main ./layer_record_'+str(model_name)+'/NetWork.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
     
     for name, layer in model.named_modules():
-        if isinstance(layer, QuantBnConv2d):
+        if isinstance(layer, QuantBnConv2d) or isinstance(layer, nn.Conv2d):
             hook_handle_list.append(layer.register_forward_hook(Neural_Sim))
     return hook_handle_list
 

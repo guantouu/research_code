@@ -30,7 +30,9 @@ def filter_indices(values, threshold):
 
 def simplify_attribute_path(attribute_path):
     parts = attribute_path.split('.')
-    if(len(parts) == 4):
+    if(len(parts) == 3):
+        simplified_parts = [parts[1], parts[2]]
+    elif(len(parts) == 4):
         simplified_parts = [parts[1]]
     elif(len(parts) == 5):
         simplified_parts = [parts[1], parts[2], parts[3]]
@@ -123,7 +125,7 @@ def compute_strip_importances(model, dataloader, criterion):
     return importances, strip_importances_per_layer
 
 
-def model_strip_group(model, importances, strip_importances_per_layer, bits, ratio=0.9):
+def model_strip_group(model, importances, strip_importances_per_layer, bits, ratio=0.9, log=True):
     all_importances = []
     known_modules = {'Conv2d'}
     modules = get_modules_list(model, known_modules)
@@ -137,12 +139,13 @@ def model_strip_group(model, importances, strip_importances_per_layer, bits, rat
     threshold = all_importances[idx]
 
     idx_recomputed = len(filter_indices(all_importances, threshold))
-    print("all importances: {}".format(len(all_importances)))
-    print('=> The threshold is: %.5f (%d), computed by function is: %.5f (%d).' %
-        (threshold, idx, threshold, idx_recomputed))  
-    # do pruning
-    print('=> Conducting network pruning. Max: %.5f, Min: %.5f, Threshold: %.5f' %
-        (max(all_importances), min(all_importances), threshold))
+    if log == True:
+        print("all importances: {}".format(len(all_importances)))
+        print('=> The threshold is: %.5f (%d), computed by function is: %.5f (%d).' %
+            (threshold, idx, threshold, idx_recomputed))  
+        # do pruning
+        print('=> Conducting network pruning. Max: %.5f, Min: %.5f, Threshold: %.5f' %
+            (max(all_importances), min(all_importances), threshold))
 
     strip_group = {}
     module_to_name = {}
@@ -167,9 +170,11 @@ def model_strip_group(model, importances, strip_importances_per_layer, bits, rat
             else:
                 strip_group_per_layer[k] = bits['insensitive']
                 strip_group[module_name].append(bits['insensitive'])
-        print("heighly/low bit :{}/{}".format(
-            strip_group_per_layer.count(bits['highly_sensitive']),
-            strip_group_per_layer.count(bits['insensitive']) 
-        ))
+        
+        if log == True:
+            print("heighly/low bit :{}/{}".format(
+                strip_group_per_layer.count(bits['highly_sensitive']),
+                strip_group_per_layer.count(bits['insensitive']) 
+            ))
     
     return strip_group

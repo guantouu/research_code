@@ -48,22 +48,32 @@ def main():
     else:
         raise ValueError("Unknown dataset type")
     #--------------------------------------------------------------------------------------------------
-    if net == 'resnet18':
+    if net == 'vgg11':
+        from models.VGG import vgg11
+        pre_trained_model = vgg11()
+        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
+        from models.Q_VGG import q_vgg11
+        model = q_vgg11(pre_trained_model)
+
+    elif net == 'resnet18':
         from models.ResNet import resnet18
         pre_trained_model = resnet18()
         pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-
         from models.Q_ResNet import q_resnet18
         model = q_resnet18(pre_trained_model)
+
     elif net == 'resnet50':
         from models.ResNet import resnet50
         pre_trained_model = resnet50()
         pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-
         from models.Q_ResNet import q_resnet50
         model = q_resnet50(pre_trained_model)
     else:
         raise ValueError("Unknown model type")
+    #--------------------------------------------------------------------------------------------------
+
+    # print(pre_trained_model)
+    # exit()
     #--------------------------------------------------------------------------------------------------
 
     if configs.strip_wise == True:

@@ -7,3 +7,14 @@ def process_config(json_file):
         config_dict = json.load(config_file)
     config = edict(config_dict)
     return config
+
+def try_contiguous(x):
+    if not x.is_contiguous():
+        x = x.contiguous()
+
+    return x
+
+def try_cuda(x):
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return x

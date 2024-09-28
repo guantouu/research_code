@@ -92,13 +92,15 @@ class QuantLinear(nn.Module):
             self.fc_scaling_factor = symmetric_linear_quantization_params(self.weight_bit, w_min, w_max,
                                                                           self.per_strip)
             self.weight_integer = self.weight_function(self.weight, self.weight_bit, self.fc_scaling_factor)
-
             bias_scaling_factor = self.fc_scaling_factor.view(1, -1)
             self.bias_integer = self.weight_function(self.bias, self.bias_bit, bias_scaling_factor)
         else:
             raise Exception('For weight, we only support symmetric quantization.')
 
         correct_output_scale = bias_scaling_factor[0].view(1, -1)
+
+        size = x.shape
+        x = x.view(size[0], size[1])
 
         return ste_round.apply(
             F.linear(x, weight=self.weight_integer, bias=self.bias_integer)) * correct_output_scale

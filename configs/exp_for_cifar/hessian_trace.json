@@ -5,10 +5,10 @@
     "batch_size": 64,
     "logdir": "/app/log",
     "data": "/data/",
-    "ratio": 0.7,
+    "ratio": 0.5,
     "bits": {
         "highly_sensitive": 8,
         "insensitive": 4
     },
     "print_freq": 10
-}
+} 
