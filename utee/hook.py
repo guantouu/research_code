@@ -6,11 +6,13 @@ import math
 import csv
 from modules.conv import QuantBnConv2d
 bit_type = '8_bit'
+next_channel = 0
 
 def Neural_Sim(self, input, output): 
     global model_n
     global wl_input
     global layer_info
+    global next_channel
 
     input_file_name =  './layer_record_' + str(model_n) + '/input_' + str(self.name) + '.csv'
     weight_file_name =  './layer_record_' + str(model_n) + '/weight_' + str(self.name) + '.csv'
@@ -26,7 +28,6 @@ def Neural_Sim(self, input, output):
     bit_8_matrix = []
     bit_4_matrix = []
     
-    input_size = input[0].shape
     padding = self.conv.padding
     stride = self.conv.stride
     
@@ -55,16 +56,23 @@ def Neural_Sim(self, input, output):
             else:
                 out_channels = 0
                 np.savetxt(weight_file_name, np.array([0.0000]), delimiter=",",fmt='%10.5f')
-        layer_info.append([input_size[2], input_size[3], input_size[1], 1, 1, out_channels, 0, stride[0]])
     else:
         input_reshape = weight_q.cpu().data.numpy()
         write_matrix_weight(input_reshape, weight_file_name)
+    
+    input_x = input[0].cpu().data.numpy()
+    if next_channel != 0:
+        input_x = input_x[:, :next_channel, :, :]
+    next_channel = int(out_channels / (k_size * k_size))
+    input_size = input_x.shape
+
+    if bit_type == '4_bit' or bit_type == '8_bit':
+        layer_info.append([input_size[2], input_size[3], input_size[1], 1, 1, out_channels, 0, stride[0]])
+    else:
         layer_info.append([input_size[2], input_size[3], input_size[1],  k_size, k_size, out_channels, 0, stride[0]])
 
-    tensor = stretch_input(input[0].cpu().data.numpy(), k_size, padding, stride)
+    tensor = stretch_input(input_x, k_size, padding, stride)
     write_matrix_activation_conv(tensor, None, wl_input, input_file_name)
-
-
 
 def write_matrix_weight(input_matrix, filename):
     cout = input_matrix.shape[0]
@@ -152,7 +160,7 @@ def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead,
     global wl_input
     global layer_info
     model_n = model_name
-    wl_input = 8
+    wl_input = 4
     layer_info = []
     
     hook_handle_list = []

@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class VGG(nn.Module):
     def __init__(self, num_blocks, num_classes=100):
-        super(VGG, self).__init__()
+        super(VGG, self).__init__()      
         self.in_channels = 3
         self.out_channels_list = [64, 128, 256, 512, 512]
         self.features = nn.Sequential()
