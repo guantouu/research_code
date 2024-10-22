@@ -1,7 +1,7 @@
 {
     "exp_name": "model training",
     "dataset": "cifar10",
-    "net": "vgg11",
+    "net": "resnet20",
     "quant_mode": "symmetric",
     "bias_bit": 32,
     "strip_wise": true,
@@ -10,10 +10,10 @@
     "weight_decay": 1e-4,
     "batch_size": 128,
     "workers": 4,
-    "epochs": 3,
+    "epochs": 100,
     "print_freq": 10,
     "data": "/data/",
     "data_percentage":0.1,
     "logdir": "/app/log/",
-    "ratio": 0.76
+    "ratio": 0.74
 }

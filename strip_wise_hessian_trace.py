@@ -48,6 +48,10 @@ def main():
         from models.ResNet import resnet50
         model = resnet50(num_classes)
         model.load_state_dict(torch.load(inference_log_dir))
+    elif net == 'resnet20':
+        from models.ResNet20 import resnet20
+        model = resnet20(num_classes)
+        model.load_state_dict(torch.load(inference_log_dir))        
     elif net == 'vgg11':
         from models.VGG import vgg11
         model = vgg11(num_classes)

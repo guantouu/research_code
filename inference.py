@@ -44,7 +44,13 @@ def main():
     elif net == "resnet50":
         from models.Q_ResNet import q_resnet50
         model = torch.load(inference_log_dir)
+    elif net == 'resnet20':
+        from models.Q_ResNet20 import q_resnet20
+        model = torch.load(inference_log_dir)
     elif net == "vgg11":
+        from models.VGG import VGG
+        model = torch.load(inference_log_dir)
+    elif net == "vgg19":
         from models.VGG import VGG
         model = torch.load(inference_log_dir)
     else:

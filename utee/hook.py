@@ -5,7 +5,7 @@ import torch
 import math
 import csv
 from modules.conv import QuantBnConv2d
-bit_type = '8_bit'
+bit_type = '4_bit'
 next_channel = 0
 
 def Neural_Sim(self, input, output): 
@@ -44,7 +44,9 @@ def Neural_Sim(self, input, output):
 
         if bit_type == '8_bit':
             if len(bit_8_matrix) != 0:
-                out_channels = bit_8_matrix.shape[0]
+                y = 1 if (bit_8_matrix.shape[0] // 16) == 0 else (bit_8_matrix.shape[0] // 16) 
+                x = y * 16
+                out_channels = x
                 write_matrix_weight(bit_8_matrix, weight_file_name)
             else:
                 out_channels = 0

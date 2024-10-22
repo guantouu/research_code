@@ -40,7 +40,6 @@ class Q_ResNet18(nn.Module):
             self.quant_output.set_param(output)
 
     def forward(self, x):
-
         x = self.init_block(x)
 
         x = self.pool(x)

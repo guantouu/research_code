@@ -62,6 +62,13 @@ def main():
         from models.Q_ResNet import q_resnet18
         model = q_resnet18(pre_trained_model)
 
+    elif net == 'resnet20':
+        from models.ResNet20 import resnet20
+        pre_trained_model = resnet20(num_classes)
+        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
+        from models.Q_ResNet20 import q_resnet20
+        model = q_resnet20(pre_trained_model)
+
     elif net == 'resnet50':
         from models.ResNet import resnet50
         pre_trained_model = resnet50()

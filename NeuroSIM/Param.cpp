@@ -78,8 +78,8 @@ Param::Param() {
 								
 	globalBufferType = false;    // false: register file
 								// true: SRAM
-	globalBufferCoreSizeRow = 128;
-	globalBufferCoreSizeCol = 128;
+	globalBufferCoreSizeRow = 32;
+	globalBufferCoreSizeCol = 32;
 	
 	tileBufferType = false;      // false: register file
 								// true: SRAM
@@ -105,12 +105,12 @@ Param::Param() {
 	
 	pipeline = true;            // false: layer-by-layer process --> huge leakage energy in HP
 								// true: pipeline process
-	speedUpDegree = 8;          // 1 = no speed up --> original speed
+	speedUpDegree = 1;          // 1 = no speed up --> original speed
 								// 2 and more : speed up ratio, the higher, the faster
 								// A speed-up degree upper bound: when there is no idle period during each layer --> no need to further fold the system clock
 								// This idle period is defined by IFM sizes and data flow, the actual process latency of each layer may be different due to extra peripheries
 	
-	validated = true;			// false: no calibration factors
+	validated = false;			// false: no calibration factors
 								// true: validated by silicon data (wiring area in layout, gate switching activity, post-layout performance drop...)
 								
 	synchronous = true;			// false: asynchronous
@@ -183,7 +183,7 @@ Param::Param() {
 	globalBusDelayTolerance = 0.1;      // to relax bus delay for global H-Tree (chip level: communication among tiles), if tolerance is 0.1, the latency will be relax to (1+0.1)*optimalLatency (trade-off with energy)
 	localBusDelayTolerance = 0.1;       // to relax bus delay for global H-Tree (tile level: communication among PEs), if tolerance is 0.1, the latency will be relax to (1+0.1)*optimalLatency (trade-off with energy)
 	treeFoldedRatio = 4;                // the H-Tree is assumed to be able to folding in layout (save area)
-	maxGlobalBusWidth = 2048;           // the max buswidth allowed on chip level (just a upper_bound, the actual bus width is defined according to the auto floorplan)
+	maxGlobalBusWidth = 1024;           // the max buswidth allowed on chip level (just a upper_bound, the actual bus width is defined according to the auto floorplan)
 										// NOTE: Carefully choose this number!!!
 										// e.g. when use pipeline with high speedUpDegree, i.e. high throughput, need to increase the global bus width (interface of global buffer) --> guarantee global buffer speed
 
@@ -200,8 +200,8 @@ Param::Param() {
 
 	outputtoggle = 0.5; // output bit toggling has a negligible portion of the interconnect energy. Set it to 50 % for simpliciity and generalizability for all neural network workloads.
 
-	numRowSubArray = 0;               // # of rows in single subArray
-	numColSubArray = 64;               // # of columns in single subArray
+	numRowSubArray = 16;               // # of rows in single subArray
+	numColSubArray = 16;               // # of columns in single subArray
 
 	// 230920 update
 
