@@ -3,40 +3,45 @@ import argparse
 import time
 import logging
 import json
-from datetime import datetime
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from models import dataset
+from models import dataset, registry
 from utils.bit_config import bit_config_dict
 from utils.common_utils import process_config
 from utils import misc
 
 
-best_acc1 = 0
-
 def main():
-    global best_acc1
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/fine_tuning.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')
     configs = process_config(args.config)
-    net = configs.net
-    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, 'best.pth')
- 
+
     log_path = os.path.join(configs.logdir, configs.net, configs.dataset)
     logging.basicConfig(format='%(asctime)s - %(message)s',
                         datefmt='%d-%b-%y %H:%M:%S', filename=log_path + '/log.log')
     logging.getLogger().setLevel(logging.INFO)
     logging.getLogger().addHandler(logging.StreamHandler())
 
-    logging.info(configs)
+    run(configs)
 
-    current_time = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+def run(configs):
+    """
+    QAT fine-tuning of one bit config; returns the best test accuracy and the saved model path.
+    Optional configs: bit_config_file (default bit_config/{net}_{dataset}_saliency_{ratio}.json)
+    and save_name (default saliency_{ratio}.pth), used when called from ratio_sweep.py.
+    """
+    best_acc1 = 0
+    net = configs.net
+    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, 'best.pth')
+    log_path = os.path.join(configs.logdir, configs.net, configs.dataset)
+
+    logging.info(configs)
 
     #--------------------------------------------------------------------------------------------------
     if configs.dataset == 'cifar10':
@@ -48,42 +53,20 @@ def main():
     else:
         raise ValueError("Unknown dataset type")
     #--------------------------------------------------------------------------------------------------
-    if net == 'vgg11':
-        from models.VGG import vgg11
-        pre_trained_model = vgg11()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_VGG import q_vgg11
-        model = q_vgg11(pre_trained_model)
-
-    elif net == 'resnet18':
-        from models.ResNet import resnet18
-        pre_trained_model = resnet18()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet import q_resnet18
-        model = q_resnet18(pre_trained_model)
-
-    elif net == 'resnet20':
-        from models.ResNet20 import resnet20
-        pre_trained_model = resnet20(num_classes)
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet20 import q_resnet20
-        model = q_resnet20(pre_trained_model)
-
-    elif net == 'resnet50':
-        from models.ResNet import resnet50
-        pre_trained_model = resnet50()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet import q_resnet50
-        model = q_resnet50(pre_trained_model)
-    else:
-        raise ValueError("Unknown model type")
+    pre_trained_model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir))
+    model = registry.build_quant_model(net, pre_trained_model)
     #--------------------------------------------------------------------------------------------------
 
     # print(pre_trained_model)
     # exit()
     #--------------------------------------------------------------------------------------------------
 
-    if configs.strip_wise == True:
+    if configs.get('bit_config_file'):
+        bit_config_path = configs.bit_config_file
+        with open(bit_config_path, 'r') as bit_config_file:
+            bit_config = json.load(bit_config_file)
+        print(bit_config_path)
+    elif configs.strip_wise == True:
         bit_config_path = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
         bit_config_path = os.path.join('bit_config', bit_config_path)
         with open(bit_config_path, 'r') as bit_config_file:
@@ -119,7 +102,7 @@ def main():
                                 weight_decay=configs.weight_decay)
 
 
-    best_epoch = 0
+    save_file = os.path.join(log_path, configs.get('save_name', f'saliency_{configs.ratio}.pth'))
     for epoch in range(configs.epochs):
         # adjust_learning_rate(optimizer, epoch, configs)
 
@@ -133,8 +116,9 @@ def main():
 
         logging.info(f'Best acc at epoch {epoch}: {best_acc1}')
         if is_best:
-            file = os.path.join(log_path, f'saliency_{configs.ratio}.pth')
-            misc.model_save(model, file)
+            misc.model_save(model, save_file)
+
+    return best_acc1, save_file
 
 def train(train_loader, model, criterion, optimizer, epoch, configs):
     batch_time = AverageMeter('Time', ':6.3f')

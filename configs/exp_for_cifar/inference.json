@@ -7,8 +7,8 @@
     "batch_size": 128,
     "ratio": 0.74,
     "print_freq": 10,
-    "wl_weight": 8,
+    "wl_weight": 4,
     "wl_activate": 8,
-    "subArray": 128,
-    "parallelRead": 128
+    "subArray": 16,
+    "parallelRead": 16
 }

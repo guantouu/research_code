@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from modules.quantizer import weight_to_strips, symmetric_linear_quantization_params, SymmetricQuantFunction
 
 def get_modules_list(model, known_modules):
     modules = []
@@ -8,25 +9,6 @@ def get_modules_list(model, known_modules):
         if classname in known_modules:
             modules.append(module)
     return modules
-
-def get_params_grad(model):
-    params = []
-    grads = []
-    for param in model.parameters():
-        if not param.requires_grad:
-            continue
-        params.append(param)
-        grads.append(0. if param.grad is None else param.grad + 0.)
-    return params, grads
-
-def filter_indices(values, threshold):
-    indices = []
-    for idx, v in enumerate(values):
-        if v > threshold:
-            indices.append(idx)
-    if len(indices) <= 1:
-        indices = [0]
-    return indices
 
 def simplify_attribute_path(attribute_path):
     parts = attribute_path.split('.')
@@ -42,139 +24,115 @@ def simplify_attribute_path(attribute_path):
     
     return simplified_path
 
-def compute_strip_importances(model, dataloader, criterion):
+def hessian_vector_product(model, params, dataloader, criterion, v):
+    """
+    Hv of the loss averaged over the whole dataloader (batches weighted by size).
+    """
+    THv = [torch.zeros_like(p) for p in params]
+    num_data = 0
+    for inputs, targets in dataloader:
+        inputs, targets = inputs.cuda(0), targets.cuda(0)
+        loss = criterion(model(inputs), targets)
+        grads = torch.autograd.grad(loss, params, create_graph=True)
+        Hv = torch.autograd.grad(grads, params, grad_outputs=v)
+        bs = inputs.size(0)
+        THv = [THv1 + Hv1.detach() * bs for THv1, Hv1 in zip(THv, Hv)]
+        num_data += bs
+    return [THv1 / num_data for THv1 in THv]
+
+def get_bn_fold_scale(model, conv):
+    """
+    Per-output-channel factor gamma / sqrt(var + eps) of the BatchNorm2d registered right after conv
+    (ConvBlock .conv/.bn in ResNet, convN/bnN in VGG); ones if the conv has no BN.
+    QuantBnConv2d quantizes the folded weight conv.weight * factor.
+    """
+    modules = list(model.modules())
+    nxt = modules[modules.index(conv) + 1] if modules.index(conv) + 1 < len(modules) else None
+    if isinstance(nxt, torch.nn.BatchNorm2d) and nxt.num_features == conv.out_channels:
+        return (nxt.weight / torch.sqrt(nxt.running_var + nxt.eps)).detach()
+    return torch.ones(conv.out_channels, device=conv.weight.device)
+
+def strip_quant_error(conv, fold_scale, bit):
+    """
+    Squared quantization error ||Q_b(w_s) - w_s||^2 of every strip, measured in the space of conv.weight.
+    Quantization follows QuantBnConv2d (per-strip symmetric on the BN-folded weight); the
+    error on the folded weight is mapped back through the fold factor.
+    """
+    with torch.no_grad():
+        O, _, kH, kW = conv.weight.shape
+        folded = conv.weight * fold_scale.view(-1, 1, 1, 1)
+        strips = weight_to_strips(folded)
+        bits = [bit] * strips.size(0)
+        scale = symmetric_linear_quantization_params(bits, strips.min(dim=1).values, strips.max(dim=1).values, True)
+        dequant = weight_to_strips(SymmetricQuantFunction.apply(folded, bits, scale)) * scale.view(-1, 1)
+        strip_fold = fold_scale.repeat_interleave(kH * kW).view(-1, 1)
+        err = torch.where(strip_fold.abs() > 1e-12, (dequant - strips) / strip_fold, torch.zeros_like(strips))
+        return (err ** 2).sum(dim=1)
+
+def compute_strip_importances(model, dataloader, criterion, bits, saliency='quant_perturbation',
+                              max_iters=100, min_iters=10, tol=0.05, seed=0, log=True):
+    """
+    Hutchinson estimate of tr(H_ss) for every crossbar strip s = weight[o, :, kh, kw] of every Conv2d:
+        tr(H_ss) = E_v[ v_s^T (Hv)_s ],  v ~ Rademacher
+    Sampling stops after min_iters once the relative standard error of the strip-trace
+    vector, sqrt(sum_s Var_s / t) / ||mean||, drops below tol, or at max_iters.
+
+    Saliency of each strip (higher = keep at high bitwidth):
+        'quant_perturbation': loss saved by the high bitwidth over the low one (HAWQ-v2 style),
+            1/2 * tr(H_ss)/n_s * (||Q_low(w_s) - w_s||^2 - ||Q_high(w_s) - w_s||^2)
+        'weight_norm': loss of zeroing the strip (Hessian-aware pruning), tr(H_ss)/n_s * ||w_s||^2
+    """
     importances = {}
     strip_importances_per_layer = {}
     known_modules = {"Conv2d"}
-    
+
+    was_training = model.training
+    model.eval()
+
     modules = get_modules_list(model, known_modules)
+    params = [m.weight for m in modules]
 
-    for m in model.parameters():
-        shape_list = [4]
-        if len(m.shape) in shape_list:
-            m.requires_grad = True
-        else:
-            m.requires_grad = False
+    # Welford running mean / M2 of per-strip v_s^T (Hv)_s, one vector per layer
+    mean = [torch.zeros(weight_to_strips(p).size(0), device=p.device) for p in params]
+    m2 = [torch.zeros_like(mu) for mu in mean]
+    gen = torch.Generator(device=params[0].device).manual_seed(seed)
 
-    image, target = next(iter(dataloader))
-    image = image.cuda(0)
-    target = target.cuda(0)
-    
-    output = model(image)
-    loss = criterion(output, target)
-    loss.backward(create_graph = True)
+    for t in range(1, max_iters + 1):
+        v = [torch.randint(0, 2, p.shape, generator=gen, device=p.device).float() * 2 - 1 for p in params]
+        Hv = hessian_vector_product(model, params, dataloader, criterion, v)
 
-    params, gradsH = get_params_grad(model)
+        for k, (Hv_k, v_k) in enumerate(zip(Hv, v)):
+            sample = (weight_to_strips(Hv_k) * weight_to_strips(v_k)).sum(dim=1)
+            delta = sample - mean[k]
+            mean[k] += delta / t
+            m2[k] += delta * (sample - mean[k])
 
-    trace_vhv = []
-    for index, p in enumerate(params):
-        trace_vhv.append([])
-        for c in range(p.size(0) * p.size(2) * p.size(3)):
-            trace_vhv[index].append([])
+        if t >= 2:
+            all_mean = torch.cat(mean)
+            all_var = torch.cat(m2) / (t - 1)
+            rel_se = (all_var.sum() / t).sqrt() / all_mean.norm().clamp(min=1e-12)
+            done = (t >= min_iters and rel_se < tol) or t == max_iters
+            if log and (t % 10 == 0 or done):
+                print('=> Hutchinson iter {}: relative std error {:.4f}, negative strips {:.2%}'.format(
+                    t, rel_se.item(), (all_mean < 0).float().mean().item()))
+            if done:
+                break
 
-    for i in range(1):
-        v = [torch.randint_like(p, high = 2).float().cuda(0) * 2 - 1 for p in params]
-
-        THv = [torch.zeros(p.size()).cuda(0) for p in params]
-
-        for inputs, targets in dataloader:
-            inputs, targets = inputs.cuda(0), targets.cuda(0)
-
-            model.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward(create_graph = True)
-
-            params, gradsH = get_params_grad(model)
-            Hv = torch.autograd.grad(gradsH, params, grad_outputs=v, only_inputs = True, retain_graph = False)
-            THv = [THv1 + Hv1/float(len(dataloader)) + 0. for THv1, Hv1 in zip(THv, Hv)]
-        Hv = THv
-
-        Hv = [Hvi.detach().cpu() for Hvi in Hv]
-        v = [vi.detach().cpu() for vi in v]
-
-        with torch.no_grad():
-            for Hv_i in range(len(Hv)):
-                strip_Hv = Hv[Hv_i].view(-1, Hv[Hv_i].size(1))
-                strip_v = v[Hv_i].view(-1, Hv[Hv_i].size(1))
-                strip_i = 0
-                for strip_Hv_i, strip_v_i in zip(strip_Hv, strip_v):
-                    trace_vhv[Hv_i][strip_i].append(strip_Hv_i.flatten().dot(strip_v_i.flatten()).item())
-                    strip_i += 1
-    
-    for m in model.parameters():
-        m.requires_grad = True
-
-    strip_trace = []
-    for k, layer in enumerate(trace_vhv):
-        strip_trace.append(torch.zeros(len(layer)))
-        for cnt, strip in enumerate(layer):
-            strip_trace[k][cnt] = sum(strip) / len(strip)
+    model.train(was_training)
 
     for k, m in enumerate(modules):
-        tmp = []
-        weight = m.weight.data
-        strip_weight = weight.view(-1, weight.size(1))
-        strip_importances_per_layer[m] = []
-        for cnt, strip_w in enumerate(strip_weight):
-            saliency = (strip_trace[k][cnt] * strip_w.detach().norm()**2 / strip_w.numel()).cpu().item()
-            tmp.append(saliency)
-            strip_importances_per_layer[m].append(saliency)
+        strip_weight = weight_to_strips(m.weight.detach())
+        avg_trace = mean[k] / strip_weight.size(1)
+        if saliency == 'quant_perturbation':
+            fold_scale = get_bn_fold_scale(model, m)
+            gain = strip_quant_error(m, fold_scale, bits['insensitive']) - strip_quant_error(m, fold_scale, bits['highly_sensitive'])
+            strip_saliency = 0.5 * avg_trace * gain
+        elif saliency == 'weight_norm':
+            strip_saliency = avg_trace * strip_weight.norm(dim=1) ** 2
+        else:
+            raise ValueError("Unknown saliency: {}".format(saliency))
+        tmp = strip_saliency.cpu().tolist()
+        strip_importances_per_layer[m] = tmp
         importances[m] = (tmp, len(tmp))
-    
+
     return importances, strip_importances_per_layer
-
-
-def model_strip_group(model, importances, strip_importances_per_layer, bits, ratio=0.9, log=True):
-    all_importances = []
-    known_modules = {'Conv2d'}
-    modules = get_modules_list(model, known_modules)
-    
-    for m in modules:
-        imp_m = importances[m]
-        imps = imp_m[0]
-        all_importances += (imps)
-    all_importances = sorted(all_importances)
-    idx = int(ratio * len(all_importances)) - 1
-    threshold = all_importances[idx]
-
-    idx_recomputed = len(filter_indices(all_importances, threshold))
-    if log == True:
-        print("all importances: {}".format(len(all_importances)))
-        print('=> The threshold is: %.5f (%d), computed by function is: %.5f (%d).' %
-            (threshold, idx, threshold, idx_recomputed))  
-        # do pruning
-        print('=> Conducting network pruning. Max: %.5f, Min: %.5f, Threshold: %.5f' %
-            (max(all_importances), min(all_importances), threshold))
-
-    strip_group = {}
-    module_to_name = {}
-    for name, module in model.named_modules():
-        classname = module.__class__.__name__
-        if classname not in known_modules:
-            continue
-        module_name = simplify_attribute_path(name)
-        module_to_name[module] = module_name
-
-    for module in model.modules():
-        classname = module.__class__.__name__
-        if classname not in known_modules:
-            continue
-        strip_group_per_layer = [0] * len(strip_importances_per_layer[module])
-        module_name = module_to_name.get(module, None)
-        strip_group[module_name] = []
-        for k in range(0, len(strip_importances_per_layer[module])):
-            if strip_importances_per_layer[module][k] > threshold:
-                strip_group_per_layer[k] = bits['highly_sensitive']
-                strip_group[module_name].append(bits['highly_sensitive'])
-            else:
-                strip_group_per_layer[k] = bits['insensitive']
-                strip_group[module_name].append(bits['insensitive'])
-        
-        if log == True:
-            print("heighly/low bit :{}/{}".format(
-                strip_group_per_layer.count(bits['highly_sensitive']),
-                strip_group_per_layer.count(bits['insensitive']) 
-            ))
-    
-    return strip_group

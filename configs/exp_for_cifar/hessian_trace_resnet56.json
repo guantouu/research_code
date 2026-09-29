@@ -1,6 +1,6 @@
 {
     "exp_name": "strip_wise_hessian_trace",
-    "net": "resnet20",
+    "net": "resnet56",
     "dataset": "cifar10",
     "batch_size": 64,
     "logdir": "/app/log",
