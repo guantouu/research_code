@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from models import dataset
+from models import dataset, registry
 from utils.bit_config import bit_config_dict
 from utils.common_utils import process_config
 from utils import misc
@@ -53,35 +53,8 @@ def run(configs):
     else:
         raise ValueError("Unknown dataset type")
     #--------------------------------------------------------------------------------------------------
-    if net == 'vgg11':
-        from models.VGG import vgg11
-        pre_trained_model = vgg11()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_VGG import q_vgg11
-        model = q_vgg11(pre_trained_model)
-
-    elif net == 'resnet18':
-        from models.ResNet import resnet18
-        pre_trained_model = resnet18()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet import q_resnet18
-        model = q_resnet18(pre_trained_model)
-
-    elif net == 'resnet20':
-        from models.ResNet20 import resnet20
-        pre_trained_model = resnet20(num_classes)
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet20 import q_resnet20
-        model = q_resnet20(pre_trained_model)
-
-    elif net == 'resnet50':
-        from models.ResNet import resnet50
-        pre_trained_model = resnet50()
-        pre_trained_model.load_state_dict(torch.load(inference_log_dir))
-        from models.Q_ResNet import q_resnet50
-        model = q_resnet50(pre_trained_model)
-    else:
-        raise ValueError("Unknown model type")
+    pre_trained_model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir))
+    model = registry.build_quant_model(net, pre_trained_model)
     #--------------------------------------------------------------------------------------------------
 
     # print(pre_trained_model)

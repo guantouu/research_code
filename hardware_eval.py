@@ -102,7 +102,7 @@ def main():
     for design in configs.designs:
         model, bit_config = build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir)
         acc1 = float(validate(val_loader, model, criterion, configs))
-        record_name = '{}_{}'.format(configs.exp_name, design['name'])
+        record_name = '{}_{}_{}_{}'.format(configs.net, configs.dataset, configs.exp_name, design['name'])
         export_trace(model, trace_images, record_name, configs)
         records.append({'design': design['name'], 'acc1': acc1, 'avg_weight_bits': avg_weight_bits(bit_config, saliency),
                         'high_strip_fraction': high_strip_fraction(bit_config), 'record_name': record_name})
@@ -113,9 +113,11 @@ def main():
     def simulate(record):
         t = time.time()
         output_file = os.path.join(out_dir, 'neurosim_{}.txt'.format(record['design']))
+        with open('layer_record_{}/trace_command.sh'.format(record['record_name']), 'r') as f:
+            args = f.read().split()
+        args[0] = os.path.join(configs.neurosim_dir, 'main')   # the binary whose Param.cpp was checked
         with open(output_file, 'w') as f:
-            subprocess.run(['bash', 'layer_record_{}/trace_command.sh'.format(record['record_name'])],
-                           stdout=f, stderr=subprocess.STDOUT, check=True)
+            subprocess.run(args, stdout=f, stderr=subprocess.STDOUT, check=True)
         logging.info('=> [{}] NeuroSIM done ({:.0f}s)'.format(record['design'], time.time() - t))
         return parse_neurosim(output_file)
     with ThreadPoolExecutor(max_workers=configs.get('max_parallel', 4)) as pool:

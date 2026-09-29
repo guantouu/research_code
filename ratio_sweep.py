@@ -1,28 +1,18 @@
 import os
 import argparse
 import csv
-import importlib
 import json
 import logging
 import time
 
 import torch
 import torch.nn as nn
-from models import dataset
+from models import dataset, registry
 from utils.common_utils import process_config
 from utils.bit_allocation import allocate_bits, bit_config_cost, pareto_front
 import fine_tuning
 from fine_tuning import train, validate
 from utils import misc
-
-# net -> (float model module, constructor, quantized model module, constructor)
-MODELS = {
-    'resnet20': ('models.ResNet20', 'resnet20', 'models.Q_ResNet20', 'q_resnet20'),
-    'resnet18': ('models.ResNet', 'resnet18', 'models.Q_ResNet', 'q_resnet18'),
-    'resnet50': ('models.ResNet', 'resnet50', 'models.Q_ResNet', 'q_resnet50'),
-    'vgg11': ('models.VGG', 'vgg11', 'models.Q_VGG', 'q_vgg11'),
-    'vgg19': ('models.VGG', 'vgg19', 'models.Q_VGG', 'q_vgg19'),
-}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -90,8 +80,7 @@ def main():
             allocator, ratio, acc1, record['avg_weight_bits'], record['high_strip_fraction'], time.time() - t))
         return record, model
 
-    float_model = getattr(importlib.import_module(MODELS[configs.net][0]), MODELS[configs.net][1])(num_classes)
-    float_model.load_state_dict(float_state)
+    float_model = registry.build_float_model(configs.net, num_classes, float_state)
     fp_acc = evaluate(float_model, val_loader)
     logging.info(f'=> FP32 accuracy: {fp_acc:.2f}')
 
@@ -183,10 +172,8 @@ def build_quant_model(configs, num_classes, float_state, bit_config):
     """
     Fresh quantized model from the FP32 weights with the given per-strip bit config (as in fine_tuning.py).
     """
-    float_module, float_ctor, quant_module, quant_ctor = MODELS[configs.net]
-    pre_trained_model = getattr(importlib.import_module(float_module), float_ctor)(num_classes)
-    pre_trained_model.load_state_dict(float_state)
-    model = getattr(importlib.import_module(quant_module), quant_ctor)(pre_trained_model)
+    pre_trained_model = registry.build_float_model(configs.net, num_classes, float_state)
+    model = registry.build_quant_model(configs.net, pre_trained_model)
 
     name_counter = 0
     for name, m in model.named_modules():

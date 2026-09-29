@@ -10,7 +10,7 @@ from datetime import datetime
 from utils.strip_utils import compute_strip_importances, simplify_attribute_path
 from utils.bit_allocation import allocate_bits
 import json
-from models import dataset
+from models import dataset, registry
 
 def main():
     parser = argparse.ArgumentParser()
@@ -41,28 +41,7 @@ def main():
     else:
         raise ValueError("Unknown dataset type")
     #--------------------------------------------------------------------------------------------------
-    if net == 'resnet18':
-        from models.ResNet import resnet18
-        model = resnet18(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))    
-    elif net == 'resnet50':
-        from models.ResNet import resnet50
-        model = resnet50(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    elif net == 'resnet20':
-        from models.ResNet20 import resnet20
-        model = resnet20(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))        
-    elif net == 'vgg11':
-        from models.VGG import vgg11
-        model = vgg11(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    elif net == 'vgg19':
-        from models.VGG import vgg19
-        model = vgg19(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    else:
-        raise ValueError("Unknown model type")
+    model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir))
 
     t_begin = time.time()
 

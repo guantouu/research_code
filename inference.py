@@ -39,23 +39,7 @@ def main():
     else:
         raise ValueError("Unknown dataset type")
     #--------------------------------------------------------------------------------------------------
-    if net == "resnet18":
-        from models.Q_ResNet import q_resnet18
-        model = torch.load(inference_log_dir, weights_only=False)
-    elif net == "resnet50":
-        from models.Q_ResNet import q_resnet50
-        model = torch.load(inference_log_dir, weights_only=False)
-    elif net == 'resnet20':
-        from models.Q_ResNet20 import q_resnet20
-        model = torch.load(inference_log_dir, weights_only=False)
-    elif net == "vgg11":
-        from models.VGG import VGG
-        model = torch.load(inference_log_dir, weights_only=False)
-    elif net == "vgg19":
-        from models.VGG import VGG
-        model = torch.load(inference_log_dir, weights_only=False)
-    else:
-        raise ValueError("Unknown model type")
+    model = torch.load(inference_log_dir, weights_only=False)   # a full quantized model saved by fine_tuning.py
     #--------------------------------------------------------------------------------------------------
 
 
