@@ -6,93 +6,59 @@ import math
 import csv
 from modules.conv import QuantBnConv2d
 from modules.quantizer import weight_to_strips
-bit_type = '4_bit'
-next_channel = 0
 
-def Neural_Sim(self, input, output): 
+def Neural_Sim(self, input, output):
+    """
+    Export one QuantBnConv2d as one NeuroSIM layer with strip-wise mixed precision.
+
+    Each crossbar strip weight[o, :, kh, kw] is a column of I rows (I = input channels), so a layer
+    is declared to NeuroSIM as a 1x1 conv with I rows and one column group per strip. NeuroSIM runs
+    with a single synapse precision (wl_weight, the low bitwidth), so a strip of b bits occupies
+    b / wl_weight column groups holding its offset-binary digits, most significant first: an 8-bit
+    strip is two 4-bit column groups. Uniform 4-bit / 8-bit baselines use the same mapping.
+    The input vectors are the activations at the kernel center, i.e. the input sampled with the
+    layer stride; the other kernel positions read shifted copies of the same feature map.
+    """
     global model_n
+    global wl_weight
     global wl_input
     global layer_info
-    global next_channel
 
     input_file_name =  './layer_record_' + str(model_n) + '/input_' + str(self.name) + '.csv'
     weight_file_name =  './layer_record_' + str(model_n) + '/weight_' + str(self.name) + '.csv'
-    f = open('./layer_record_' + str(model_n) + '/trace_command.sh', "a")
-    f.write(weight_file_name+' '+input_file_name+' ')
+    with open('./layer_record_' + str(model_n) + '/trace_command.sh', "a") as f:
+        f.write(weight_file_name+' '+input_file_name+' ')
 
-    k_size = self.conv.kernel_size[0]
-    weight_bit = self.weight_bit
-    weight_q = self.weight_integer
-    in_channels = self.conv.in_channels
-    out_channels = self.conv.out_channels
+    strips = weight_to_strips(self.weight_integer).cpu().data.numpy()
+    columns = []
+    for strip, bit in zip(strips, self.weight_bit):
+        columns.extend(strip_to_columns(strip, int(bit), wl_weight))
+    weight_matrix = np.stack(columns, axis=1)   # [I, #column groups]
+    np.savetxt(weight_file_name, weight_matrix, delimiter=",", fmt='%10.5f')
 
-    bit_8_matrix = []
-    bit_4_matrix = []
-    
-    padding = self.conv.padding
     stride = self.conv.stride
-    
-    if bit_type == '4_bit' or bit_type == '8_bit':
-        input_reshape = weight_to_strips(weight_q).cpu().data.numpy()
-        for i, bit in enumerate(weight_bit):
-            if bit == 4:
-                bit_4_matrix.append(input_reshape[i])
-            else:
-                bit_8_matrix.append(input_reshape[i])
-        
-        bit_8_matrix = process_matrix(bit_8_matrix, k_size, in_channels)
-        bit_4_matrix = process_matrix(bit_4_matrix, k_size, in_channels)
-
-        if bit_type == '8_bit':
-            if len(bit_8_matrix) != 0:
-                y = 1 if (bit_8_matrix.shape[0] // 16) == 0 else (bit_8_matrix.shape[0] // 16) 
-                x = y * 16
-                out_channels = x
-                write_matrix_weight(bit_8_matrix, weight_file_name)
-            else:
-                out_channels = 0
-                np.savetxt(weight_file_name, np.array([0.0000]), delimiter=",",fmt='%10.5f') 
-        if bit_type == '4_bit':
-            if len(bit_4_matrix) != 0:
-                out_channels = bit_4_matrix.shape[0]
-                write_matrix_weight(bit_4_matrix, weight_file_name)
-            else:
-                out_channels = 0
-                np.savetxt(weight_file_name, np.array([0.0000]), delimiter=",",fmt='%10.5f')
-    else:
-        input_reshape = weight_q.cpu().data.numpy()
-        write_matrix_weight(input_reshape, weight_file_name)
-    
     input_x = input[0].cpu().data.numpy()
-    if next_channel != 0:
-        input_x = input_x[:, :next_channel, :, :]
-    next_channel = int(out_channels / (k_size * k_size))
     input_size = input_x.shape
+    layer_info.append([input_size[2], input_size[3], input_size[1], 1, 1, weight_matrix.shape[1], 0, stride[0]])
 
-    if bit_type == '4_bit' or bit_type == '8_bit':
-        layer_info.append([input_size[2], input_size[3], input_size[1], 1, 1, out_channels, 0, stride[0]])
-    else:
-        layer_info.append([input_size[2], input_size[3], input_size[1],  k_size, k_size, out_channels, 0, stride[0]])
-
-    tensor = stretch_input(input_x, k_size, padding, stride)
+    input_x = input_x / max(np.abs(input_x).max(), 1e-12) * (1 - 2.0 ** (1 - wl_input))   # into [-1, 1) for dec2bin
+    tensor = stretch_input(input_x, 1, (0, 0), stride)
     write_matrix_activation_conv(tensor, None, wl_input, input_file_name)
 
-def write_matrix_weight(input_matrix, filename):
-    cout = input_matrix.shape[0]
-    weight_matrix = input_matrix.reshape(cout,-1).transpose()
-    np.savetxt(filename, weight_matrix, delimiter=",",fmt='%10.5f')
-
-def process_matrix(matrix_list, k_size, in_channels):
-    remainder = len(matrix_list) % (k_size * k_size)
-    if remainder != 0:
-        matrix_list = matrix_list[:-remainder]
-    
-    if len(matrix_list) != 0:
-        matrix_reshaped = np.vstack(matrix_list)
-        return matrix_reshaped
-    else:
-        return []
-
+def strip_to_columns(strip, bit, column_bit):
+    """
+    Split one strip of signed integers into bit / column_bit NeuroSIM columns in [-1, 1].
+    NeuroSIM maps a weight f to the unsigned integer 2^(column_bit-1) * (f + 1), so each column
+    holds one column_bit-wide digit d of the offset-binary weight as f = d / 2^(column_bit-1) - 1.
+    """
+    if bit % column_bit != 0:
+        raise ValueError("Strip bitwidth {} is not a multiple of the column bitwidth {}".format(bit, column_bit))
+    unsigned = np.rint(strip).astype(np.int64) + 2 ** (bit - 1)
+    columns = []
+    for k in reversed(range(bit // column_bit)):
+        digit = (unsigned >> (k * column_bit)) & (2 ** column_bit - 1)
+        columns.append(digit / 2 ** (column_bit - 1) - 1)
+    return columns
 
 def write_matrix_activation_conv(input_matrix, fill_dimension, length,filename):
     filled_matrix_b = np.zeros([input_matrix.shape[2],input_matrix.shape[1]*length],dtype=str)
@@ -154,18 +120,24 @@ def remove_hook_list(hook_handle_list):
     with open(filename, 'w') as file:
         writer = csv.writer(file)
         writer.writerows(layer_info)
-    
+
     for handle in hook_handle_list:
         handle.remove()
 
-def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead, model_name): 
+def hardware_evaluation(model, wl_weight_, wl_activation, subArray, parallelRead, model_name):
+    """
+    wl_weight_ is the NeuroSIM synapse precision, i.e. the bitwidth of one column group (the low
+    bitwidth of the strip bit config); higher-bitwidth strips use several column groups.
+    """
     global model_n
+    global wl_weight
     global wl_input
     global layer_info
     model_n = model_name
-    wl_input = 4
+    wl_weight = wl_weight_
+    wl_input = wl_activation
     layer_info = []
-    
+
     hook_handle_list = []
     if not os.path.exists('./layer_record_'+str(model_name)):
         os.makedirs('./layer_record_'+str(model_name))
@@ -173,9 +145,9 @@ def hardware_evaluation(model, wl_weight, wl_activation, subArray, parallelRead,
         os.remove('./layer_record_'+str(model_name)+'/trace_command.sh')
     f = open('./layer_record_'+str(model_name)+'/trace_command.sh', "w")
     f.write('./NeuroSIM/main ./layer_record_'+str(model_name)+'/NetWork.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
-    
+    f.close()
+
     for name, layer in model.named_modules():
-        if isinstance(layer, QuantBnConv2d) or isinstance(layer, nn.Conv2d):
+        if isinstance(layer, QuantBnConv2d):
             hook_handle_list.append(layer.register_forward_hook(Neural_Sim))
     return hook_handle_list
-

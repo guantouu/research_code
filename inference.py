@@ -83,7 +83,7 @@ def main():
             if i == 1:
                 hook_handle_list = hook.hardware_evaluation(
                     model, configs.wl_weight, configs.wl_activate, 
-                    configs.subArray, configs.parallelRead, configs.net
+                    configs.subArray, configs.parallelRead, configs.get('record_name', configs.net)
                 )
                 
             images = images.cuda(0, non_blocking=True)
