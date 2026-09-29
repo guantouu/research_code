@@ -7,7 +7,8 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from utils.common_utils import process_config
 from datetime import datetime
-from utils.strip_utils import compute_strip_importances, model_strip_group
+from utils.strip_utils import compute_strip_importances, simplify_attribute_path
+from utils.bit_allocation import allocate_bits
 import json
 from models import dataset
 
@@ -69,18 +70,39 @@ def main():
     model = model.cuda(0)
     criterion = nn.CrossEntropyLoss().cuda(0)
 
-    strip_group = hessian_trace(model, val_loader, criterion, configs)
+    # estimate the Hessian on a training subset, not on the test set used for validation
+    hessian_loader = dataset.get_hessian_loader(configs.dataset, configs.batch_size, configs.hessian_samples,
+                                                seed=configs.seed)
+    saliency = hessian_trace(model, hessian_loader, criterion, configs)
+    logging.info('Hessian trace time: {:.1f}s'.format(time.time() - t_begin))
+
+    # saliency is computed once; ratio_sweep.py reuses it for any ratio / allocator
+    os.makedirs('saliency', exist_ok=True)
+    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.saliency}.json')
+    with open(saliency_file, 'w') as json_file:
+        json.dump(saliency, json_file)
+    logging.info(f'Saliency saved to {saliency_file}')
+
+    strip_group = allocate_bits('saliency', saliency, configs.bits, configs.ratio, log=True)
     strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
+    os.makedirs('bit_config', exist_ok=True)
     strip_bit_config = os.path.join('bit_config', strip_bit_config)
     with open(strip_bit_config, 'w') as json_file:
         json.dump(strip_group, json_file, indent=4)
 
     validate(val_loader, model, criterion, configs)
 
-def hessian_trace(model, val_loader, criterion, configs):
-    importances, strip_importances_per_layer = compute_strip_importances(model, val_loader, criterion)
-    strip_group = model_strip_group(model, importances, strip_importances_per_layer, configs.bits, configs.ratio)
-    return strip_group
+def hessian_trace(model, dataloader, criterion, configs):
+    importances, strip_importances_per_layer = compute_strip_importances(
+        model, dataloader, criterion, configs.bits, saliency=configs.saliency,
+        max_iters=configs.hutchinson_max_iters, min_iters=configs.hutchinson_min_iters,
+        tol=configs.hutchinson_tol, seed=configs.seed)
+    saliency = {}
+    for name, m in model.named_modules():
+        if m in strip_importances_per_layer:
+            saliency[simplify_attribute_path(name)] = {'strip_len': m.in_channels,
+                                                       'saliency': strip_importances_per_layer[m]}
+    return saliency
 
 def validate(val_loader, model, criterion, configs):
     batch_time = AverageMeter('Time', ':6.3f')

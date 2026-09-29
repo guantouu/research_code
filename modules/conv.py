@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from modules.quantizer import SymmetricQuantFunction, AsymmetricQuantFunction, symmetric_linear_quantization_params
+from modules.quantizer import SymmetricQuantFunction, AsymmetricQuantFunction, symmetric_linear_quantization_params, weight_to_strips
 import torch.nn.functional as F
 
 class QuantBnConv2d(nn.Module):
@@ -87,8 +87,7 @@ class QuantBnConv2d(nn.Module):
         scaled_bias = (scaled_bias - self.bn.running_mean.detach()) * scale_factor + self.bn.bias
 
         if self.per_strip:
-            w_permute = scaled_weight.data.permute(1, 0, 2, 3)
-            strip_w_transform = w_permute.contiguous().view(self.conv.in_channels, -1).transpose(0, 1)
+            strip_w_transform = weight_to_strips(scaled_weight.data)
             w_min = strip_w_transform.min(dim=1).values
             w_max = strip_w_transform.max(dim=1).values
 
@@ -112,6 +111,18 @@ class QuantBnConv2d(nn.Module):
             self.convbn_scaled_bias = scaled_bias
         else:
             raise Exception('For weight, we only support symmetric quantization.')
+
+        if self.per_strip:
+            # every strip weight[o, :, kh, kw] has its own scale, so there is no common output
+            # scale per channel: dequantize each strip with its own scale before the convolution
+            O, _, kH, kW = self.weight_integer.shape
+            strip_scale = self.convbn_scaling_factor.view(O, 1, kH, kW)
+            if self.quantize_bias:
+                bias = self.bias_integer * self.convbn_bias_scaling_factor
+            else:
+                bias = scaled_bias
+            return F.conv2d(x, self.weight_integer * strip_scale, bias, self.conv.stride, self.conv.padding,
+                            self.conv.dilation, self.conv.groups)
 
         correct_output_scale = bias_scaling_factor.view(1, -1, 1, 1)
 

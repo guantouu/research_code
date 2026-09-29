@@ -5,6 +5,7 @@ import torch
 import math
 import csv
 from modules.conv import QuantBnConv2d
+from modules.quantizer import weight_to_strips
 bit_type = '4_bit'
 next_channel = 0
 
@@ -32,7 +33,7 @@ def Neural_Sim(self, input, output):
     stride = self.conv.stride
     
     if bit_type == '4_bit' or bit_type == '8_bit':
-        input_reshape = weight_q.cpu().data.numpy().reshape(-1, in_channels)
+        input_reshape = weight_to_strips(weight_q).cpu().data.numpy()
         for i, bit in enumerate(weight_bit):
             if bit == 4:
                 bit_4_matrix.append(input_reshape[i])

@@ -27,7 +27,8 @@ def main():
 
     logging.info(configs)
 
-    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, f'saliency_{configs.ratio}.pth')
+    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset,
+                                     configs.get('model_file', f'saliency_{configs.ratio}.pth'))
     net = configs.net
 
     #--------------------------------------------------------------------------------------------------
@@ -40,19 +41,19 @@ def main():
     #--------------------------------------------------------------------------------------------------
     if net == "resnet18":
         from models.Q_ResNet import q_resnet18
-        model = torch.load(inference_log_dir)
+        model = torch.load(inference_log_dir, weights_only=False)
     elif net == "resnet50":
         from models.Q_ResNet import q_resnet50
-        model = torch.load(inference_log_dir)
+        model = torch.load(inference_log_dir, weights_only=False)
     elif net == 'resnet20':
         from models.Q_ResNet20 import q_resnet20
-        model = torch.load(inference_log_dir)
+        model = torch.load(inference_log_dir, weights_only=False)
     elif net == "vgg11":
         from models.VGG import VGG
-        model = torch.load(inference_log_dir)
+        model = torch.load(inference_log_dir, weights_only=False)
     elif net == "vgg19":
         from models.VGG import VGG
-        model = torch.load(inference_log_dir)
+        model = torch.load(inference_log_dir, weights_only=False)
     else:
         raise ValueError("Unknown model type")
     #--------------------------------------------------------------------------------------------------
