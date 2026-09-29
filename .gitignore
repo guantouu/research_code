@@ -1,4 +1,4 @@
-*/__pycache__
+__pycache__/
 *.o
 /log
 /layer_record_*
@@ -6,3 +6,5 @@
 /bit_config
 /data
 /saliency
+/NeuroSim/Inference_pytorch/log/
+/NeuroSim/Inference_pytorch/NeuroSIM/main
