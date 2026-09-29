@@ -55,15 +55,17 @@ def main():
     saliency = hessian_trace(model, hessian_loader, criterion, configs)
     logging.info('Hessian trace time: {:.1f}s'.format(time.time() - t_begin))
 
-    # saliency is computed once; ratio_sweep.py reuses it for any ratio / allocator
+    # saliency is computed once; ratio_sweep.py reuses it for any ratio / allocator.
+    # It depends on the bit pair through the quantization error, so other pairs than 8/4 set a tag (e.g. "8_2")
+    suffix = f"_{configs.tag}" if configs.get('tag') else ''
     os.makedirs('saliency', exist_ok=True)
-    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.saliency}.json')
+    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.saliency}{suffix}.json')
     with open(saliency_file, 'w') as json_file:
         json.dump(saliency, json_file)
     logging.info(f'Saliency saved to {saliency_file}')
 
     strip_group = allocate_bits('saliency', saliency, configs.bits, configs.ratio, log=True)
-    strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
+    strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}{suffix}.json'
     os.makedirs('bit_config', exist_ok=True)
     strip_bit_config = os.path.join('bit_config', strip_bit_config)
     with open(strip_bit_config, 'w') as json_file:
