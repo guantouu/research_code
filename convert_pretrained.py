@@ -1,8 +1,8 @@
 """
-Replace FP32 training with pretrained CIFAR weights from chenyaofo/pytorch-cifar-models:
-download (or read) the weights, map them onto the model in models/registry.py, check the test
-accuracy against the published value and save them as {logdir}/{net}/{dataset}/best.pth for the
-rest of the pipeline.
+Replace FP32 training with pretrained weights: chenyaofo/pytorch-cifar-models for CIFAR, torchvision
+IMAGENET1K_V1 for ImageNet. Download (or read) the weights, map them onto the model in
+models/registry.py, check the test accuracy against the published value and save them as
+{logdir}/{net}/{dataset}/best.pth for the rest of the pipeline.
 """
 import os
 import argparse
@@ -30,7 +30,6 @@ PRETRAINED = {
     ('vgg16', 'cifar100'): ('vgg/cifar100_vgg16_bn-7d8c4031.pt', 74.00),
     ('vgg19', 'cifar100'): ('vgg/cifar100_vgg19_bn-b98f7bd7.pt', 73.87),
 }
-NUM_CLASSES = {'cifar10': 10, 'cifar100': 100}
 
 def convert_state_dict(pretrained, model):
     """
@@ -60,25 +59,32 @@ def evaluate(model, loader):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--net', type=str, default='resnet20', choices=sorted({net for net, _ in PRETRAINED}))
-    parser.add_argument('--dataset', type=str, default='cifar10', choices=list(NUM_CLASSES))
-    parser.add_argument('--weights', type=str, default=None, help='local weight file; downloaded if not given')
+    parser.add_argument('--net', type=str, default='resnet20',
+                        choices=sorted({net for net, _ in PRETRAINED} | set(registry.IMAGENET_MODELS)))
+    parser.add_argument('--dataset', type=str, default='cifar10', choices=list(dataset.NUM_CLASSES))
+    parser.add_argument('--weights', type=str, default=None, help='local CIFAR weight file; downloaded if not given')
     parser.add_argument('--logdir', type=str, default='/app/log')
     parser.add_argument('--force', action='store_true', help='overwrite an existing best.pth')
     args = parser.parse_args()
 
-    release_file, published_acc = PRETRAINED[(args.net, args.dataset)]
-    if args.weights:
-        state_dict = torch.load(args.weights, map_location='cpu')
+    model = registry.build_float_model(args.net, dataset.NUM_CLASSES[args.dataset], dataset=args.dataset)
+    if args.dataset == 'imagenet':
+        # torchvision weights, already named for the torchvision model
+        state_dict, published_acc = registry.imagenet_pretrained(args.net)
+        model.load_state_dict(state_dict, strict=True)
     else:
-        state_dict = torch.hub.load_state_dict_from_url(BASE_URL + release_file, map_location='cpu', progress=True)
-
-    model = registry.build_float_model(args.net, NUM_CLASSES[args.dataset])
-    model.load_state_dict(convert_state_dict(state_dict, model), strict=True)
+        if (args.net, args.dataset) not in PRETRAINED:
+            raise ValueError('No pretrained {} for {}'.format(args.net, args.dataset))
+        release_file, published_acc = PRETRAINED[(args.net, args.dataset)]
+        if args.weights:
+            state_dict = torch.load(args.weights, map_location='cpu')
+        else:
+            state_dict = torch.hub.load_state_dict_from_url(BASE_URL + release_file, map_location='cpu', progress=True)
+        model.load_state_dict(convert_state_dict(state_dict, model), strict=True)
     model = model.cuda(0)
 
-    _, val_loader = dataset.get_cifar10(batch_size=256) if args.dataset == 'cifar10' else \
-        dataset.get_cifar100(batch_size=256)
+    # the whole test set (for ImageNet the whole validation set), as for the published accuracy
+    _, val_loader, _ = dataset.get_loaders(args.dataset, 256, train=False, full_val=True)
     acc = evaluate(model, val_loader)
     print('=> Test accuracy: {:.2f} (published: {:.2f})'.format(acc, published_acc))
     if abs(acc - published_acc) > 0.5:

@@ -34,7 +34,8 @@ def Neural_Sim(self, input, output):
     for strip, bit in zip(strips, self.weight_bit):
         columns.extend(strip_to_columns(strip, int(bit), wl_weight))
     weight_matrix = np.stack(columns, axis=1)   # [I, #column groups]
-    np.savetxt(weight_file_name, weight_matrix, delimiter=",", fmt='%10.5f')
+    # the values are multiples of 2^(1-wl_weight), which %.8g writes exactly and compactly
+    np.savetxt(weight_file_name, weight_matrix, delimiter=",", fmt='%.8g')
 
     stride = self.conv.stride
     input_x = input[0].cpu().data.numpy()
