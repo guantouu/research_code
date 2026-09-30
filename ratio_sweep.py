@@ -33,14 +33,9 @@ def main():
     logging.info(configs)
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        train_loader, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-        num_classes = 10
-    elif configs.dataset == 'cifar100':
-        train_loader, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-        num_classes = 100
-    else:
-        raise ValueError("Unknown dataset type")
+    train_loader, val_loader, num_classes = dataset.get_loaders(configs.dataset, configs.batch_size)
+    if train_loader is None and (configs.finetune_epochs > 0 or configs.qat_after_search):
+        raise ValueError("No training set for {}: set finetune_epochs 0 and qat_after_search false".format(configs.dataset))
     #--------------------------------------------------------------------------------------------------
 
     with open(configs.saliency_file, 'r') as f:
@@ -80,7 +75,7 @@ def main():
             allocator, ratio, acc1, record['avg_weight_bits'], record['high_strip_fraction'], time.time() - t))
         return record, model
 
-    float_model = registry.build_float_model(configs.net, num_classes, float_state)
+    float_model = registry.build_float_model(configs.net, num_classes, float_state, configs.dataset)
     fp_acc = evaluate(float_model, val_loader)
     logging.info(f'=> FP32 accuracy: {fp_acc:.2f}')
 
@@ -172,8 +167,8 @@ def build_quant_model(configs, num_classes, float_state, bit_config):
     """
     Fresh quantized model from the FP32 weights with the given per-strip bit config (as in fine_tuning.py).
     """
-    pre_trained_model = registry.build_float_model(configs.net, num_classes, float_state)
-    model = registry.build_quant_model(configs.net, pre_trained_model)
+    pre_trained_model = registry.build_float_model(configs.net, num_classes, float_state, configs.dataset)
+    model = registry.build_quant_model(configs.net, pre_trained_model, configs.dataset)
 
     name_counter = 0
     for name, m in model.named_modules():

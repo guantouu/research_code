@@ -32,12 +32,7 @@ def main():
     net = configs.net
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-    elif configs.dataset == 'cifar100':
-        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-    else:
-        raise ValueError("Unknown dataset type")
+    _, val_loader, _ = dataset.get_loaders(configs.dataset, configs.batch_size, train=False)
     #--------------------------------------------------------------------------------------------------
     model = torch.load(inference_log_dir, weights_only=False)   # a full quantized model saved by fine_tuning.py
     #--------------------------------------------------------------------------------------------------

@@ -80,14 +80,7 @@ def main():
     shutil.copy(args.config, os.path.join(out_dir, 'config.json'))
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-        num_classes = 10
-    elif configs.dataset == 'cifar100':
-        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-        num_classes = 100
-    else:
-        raise ValueError("Unknown dataset type")
+    _, val_loader, num_classes = dataset.get_loaders(configs.dataset, configs.batch_size, train=False)
     #--------------------------------------------------------------------------------------------------
 
     with open(configs.saliency_file, 'r') as f:

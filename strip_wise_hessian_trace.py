@@ -7,7 +7,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from utils.common_utils import process_config
 from datetime import datetime
-from utils.strip_utils import compute_strip_importances, simplify_attribute_path
+from utils.strip_utils import compute_strip_importances
 from utils.bit_allocation import allocate_bits
 import json
 from models import dataset, registry
@@ -32,16 +32,9 @@ def main():
     net = configs.net
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-        num_classes=10
-    elif configs.dataset == 'cifar100':
-        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-        num_classes=100
-    else:
-        raise ValueError("Unknown dataset type")
+    _, val_loader, num_classes = dataset.get_loaders(configs.dataset, configs.batch_size, train=False)
     #--------------------------------------------------------------------------------------------------
-    model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir))
+    model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir), configs.dataset)
 
     t_begin = time.time()
 
@@ -81,7 +74,7 @@ def hessian_trace(model, dataloader, criterion, configs):
     saliency = {}
     for name, m in model.named_modules():
         if m in strip_importances_per_layer:
-            saliency[simplify_attribute_path(name)] = {'strip_len': m.in_channels,
+            saliency[registry.saliency_key(name, configs.dataset)] = {'strip_len': m.in_channels,
                                                        'saliency': strip_importances_per_layer[m]}
     return saliency
 

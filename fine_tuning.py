@@ -44,17 +44,12 @@ def run(configs):
     logging.info(configs)
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        train_loader, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-        num_classes=10
-    elif configs.dataset == 'cifar100':
-        train_loader, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-        num_classes=100
-    else:
-        raise ValueError("Unknown dataset type")
+    train_loader, val_loader, num_classes = dataset.get_loaders(configs.dataset, configs.batch_size)
+    if train_loader is None:
+        raise ValueError("No training set for {}: QAT is not available (PTQ only)".format(configs.dataset))
     #--------------------------------------------------------------------------------------------------
-    pre_trained_model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir))
-    model = registry.build_quant_model(net, pre_trained_model)
+    pre_trained_model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir), configs.dataset)
+    model = registry.build_quant_model(net, pre_trained_model, configs.dataset)
     #--------------------------------------------------------------------------------------------------
 
     # print(pre_trained_model)

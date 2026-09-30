@@ -23,7 +23,8 @@ link() {
 
 echo "[1/5] Python packages"
 python -c "import easydict" 2>/dev/null || pip install -q easydict
-echo "  easydict ok"
+python -c "import scipy" 2>/dev/null || pip install -q scipy   # torchvision reads the ImageNet devkit with scipy
+echo "  easydict, scipy ok"
 
 echo "[2/5] /app -> repo (default path in all configs)"
 link "$REPO_DIR" /app
