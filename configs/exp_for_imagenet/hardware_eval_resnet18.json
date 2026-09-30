@@ -1,0 +1,52 @@
+{
+    "exp_name": "ptq_8_2",
+    "net": "resnet18",
+    "dataset": "imagenet",
+    "logdir": "/app/log",
+    "batch_size": 64,
+    "print_freq": 1000,
+    "bias_bit": 32,
+    "seed": 0,
+    "saliency_file": "saliency/resnet18_imagenet_quant_perturbation_8_2.json",
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 2
+    },
+    "designs": [
+        {
+            "name": "all8",
+            "uniform": 8
+        },
+        {
+            "name": "saliency_0.02",
+            "allocator": "saliency",
+            "ratio": 0.02
+        },
+        {
+            "name": "random_0.02",
+            "allocator": "random",
+            "ratio": 0.02
+        },
+        {
+            "name": "saliency_0.2",
+            "allocator": "saliency",
+            "ratio": 0.2
+        },
+        {
+            "name": "random_0.2",
+            "allocator": "random",
+            "ratio": 0.2
+        },
+        {
+            "name": "all2",
+            "uniform": 2
+        }
+    ],
+    "reference": "all8",
+    "wl_weight": 2,
+    "wl_activate": 8,
+    "subArray": 16,
+    "parallelRead": 16,
+    "neurosim_dir": "NeuroSIM",
+    "max_parallel": 6
+}

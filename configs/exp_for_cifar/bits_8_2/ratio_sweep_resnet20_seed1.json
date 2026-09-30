@@ -1,0 +1,45 @@
+{
+    "exp_name": "ratio_sweep_8_2_seed1",
+    "net": "resnet20",
+    "dataset": "cifar10",
+    "batch_size": 128,
+    "logdir": "/app/log",
+    "print_freq": 1000,
+    "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 2
+    },
+    "bias_bit": 32,
+    "allocators": [
+        "random"
+    ],
+    "seed": 1,
+    "search": "grid",
+    "ratios": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.8,
+        0.9,
+        1.0
+    ],
+    "max_acc_drop": 1.0,
+    "ratio_tol": 0.01,
+    "search_samples": 5000,
+    "qat_after_search": false,
+    "qat_allocators": [
+        "saliency"
+    ],
+    "finetune_config": "/app/configs/exp_for_cifar/fine_tuning.json",
+    "finetune_epochs": 0,
+    "lr": 0.001,
+    "momentum": 0.9,
+    "weight_decay": 0.0001,
+    "save_models": false
+}

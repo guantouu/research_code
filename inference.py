@@ -27,34 +27,14 @@ def main():
 
     logging.info(configs)
 
-    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset, f'saliency_{configs.ratio}.pth')
+    inference_log_dir = os.path.join(configs.logdir, configs.net, configs.dataset,
+                                     configs.get('model_file', f'saliency_{configs.ratio}.pth'))
     net = configs.net
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-    elif configs.dataset == 'cifar100':
-        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-    else:
-        raise ValueError("Unknown dataset type")
+    _, val_loader, _ = dataset.get_loaders(configs.dataset, configs.batch_size, train=False)
     #--------------------------------------------------------------------------------------------------
-    if net == "resnet18":
-        from models.Q_ResNet import q_resnet18
-        model = torch.load(inference_log_dir)
-    elif net == "resnet50":
-        from models.Q_ResNet import q_resnet50
-        model = torch.load(inference_log_dir)
-    elif net == 'resnet20':
-        from models.Q_ResNet20 import q_resnet20
-        model = torch.load(inference_log_dir)
-    elif net == "vgg11":
-        from models.VGG import VGG
-        model = torch.load(inference_log_dir)
-    elif net == "vgg19":
-        from models.VGG import VGG
-        model = torch.load(inference_log_dir)
-    else:
-        raise ValueError("Unknown model type")
+    model = torch.load(inference_log_dir, weights_only=False)   # a full quantized model saved by fine_tuning.py
     #--------------------------------------------------------------------------------------------------
 
 
@@ -82,7 +62,7 @@ def main():
             if i == 1:
                 hook_handle_list = hook.hardware_evaluation(
                     model, configs.wl_weight, configs.wl_activate, 
-                    configs.subArray, configs.parallelRead, configs.net
+                    configs.subArray, configs.parallelRead, configs.get('record_name', configs.net)
                 )
                 
             images = images.cuda(0, non_blocking=True)

@@ -16,6 +16,21 @@ class ste_round(Function):
         return grad_output.clone()
 
 
+def weight_to_strips(weight):
+    """
+    Reshape a conv weight [O, I, kH, kW] into crossbar strips [O*kH*kW, I].
+    Row j = weight[o, :, kh, kw] with j = o*kH*kW + kh*kW + kw, i.e. the I input
+    channels of one output channel at one kernel position (one crossbar column segment).
+    """
+    return weight.permute(0, 2, 3, 1).reshape(-1, weight.size(1))
+
+def strips_to_weight(strips, size):
+    """
+    Inverse of weight_to_strips: [O*kH*kW, I] -> [O, I, kH, kW].
+    """
+    O, I, kH, kW = size
+    return strips.reshape(O, kH, kW, I).permute(0, 3, 1, 2).contiguous()
+
 def linear_quantize(input, scale, zero_point, inplace=False):
     """
     Quantize floating point input tensor to integers with the given scaling factor and zeropoint.
@@ -26,14 +41,17 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     scale: scaling factor for quantization
     zero_pint: shift for quantization
     """
-    # reshape scale and zeropoint for convolutional weights and activations
-    size = input.size()
-    if len(input.shape) == 4:
-        input = input.view(-1, input.size(1))
-        scale = scale.view(-1, 1)
-        zero_point = zero_point.view(-1, 1)
+    # per-strip conv weights: one scale per crossbar strip weight[o, :, kh, kw]
+    if len(input.shape) == 4 and scale.numel() > 1:
+        quantize = weight_to_strips(input) / scale.view(-1, 1) + zero_point.view(-1, 1)
+        quantize = strips_to_weight(torch.round(quantize), input.size())
+        if inplace:
+            input.copy_(quantize)
+            return input
+        return quantize
     # reshape scale and zeropoint for linear weights
-    elif len(input.shape) == 2:
+    size = input.size()
+    if len(input.shape) == 2:
         scale = scale.view(-1, 1)
         zero_point = zero_point.view(-1, 1)
     else:
@@ -135,12 +153,20 @@ class SymmetricQuantFunction(Function):
         x_size = new_quant_x.size()
 
         if (isinstance(k, list)): 
-            new_quant_x = new_quant_x.view(-1, new_quant_x.size(1))
-            strip_quant_x = []
-            for i in range (new_quant_x.shape[0]):
-                n = 2 ** (k[i] - 1) - 1
-                strip_quant_x.append(torch.clamp(new_quant_x[i], -n - 1, n))
-            quant_x = torch.stack(strip_quant_x).view(x_size)
+            # per-strip bitwidth: conv strips are weight[o, :, kh, kw], linear strips are rows
+            if len(x_size) == 4:
+                strips = weight_to_strips(new_quant_x)
+            else:
+                strips = new_quant_x.view(-1, new_quant_x.size(1))
+            assert strips.shape[0] == len(k), \
+                "got {} bitwidths for {} strips".format(len(k), strips.shape[0])
+            n = 2 ** (torch.tensor(k, device=strips.device, dtype=strips.dtype) - 1) - 1
+            n = n.view(-1, 1)
+            strips = torch.max(torch.min(strips, n), -n - 1)
+            if len(x_size) == 4:
+                quant_x = strips_to_weight(strips, x_size)
+            else:
+                quant_x = strips.view(x_size)
         else:
             n = 2 ** (k - 1) - 1
             quant_x = torch.clamp(new_quant_x, -n - 1, n)
@@ -156,8 +182,10 @@ class SymmetricQuantFunction(Function):
         output_size = grad_output.clone().shape
         output = grad_output.clone()
         if len(grad_output.shape) == 4:
-            output = output.view(-1, output.size(1))
-            scale = scale.view(-1, 1)
+            if scale.numel() > 1:
+                result = strips_to_weight(weight_to_strips(output) / scale.view(-1, 1), output_size)
+                return result, None, None, None
+            scale = scale.view(-1)
         # reshape scale and zeropoint for linear weights
         elif len(grad_output.shape) == 2:
             scale = scale.view(-1, 1)

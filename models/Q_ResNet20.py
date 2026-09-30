@@ -5,14 +5,19 @@ from modules.pool import QuantAdaptiveAvgPool2d, QuantAvgPool2d
 from modules.conv import QuantBnConv2d
 
 class Q_ResNet20(nn.Module):
-    def __init__(self, model=None):
+    """
+    Quantized CIFAR ResNet (resnet20/32/44/56); the number of units per stage follows the given model.
+    """
+    def __init__(self, model=None, units_per_stage=(3, 3, 3)):
         super().__init__()
 
         # Initial convolution layer
         self.init_block = QuantBnConv2d()
         self.act = nn.ReLU(inplace=True)
 
-        self.channel = [3, 3, 3]
+        if model is not None:
+            units_per_stage = [len(getattr(model.features, "stage{}".format(i + 1))) for i in range(3)]
+        self.channel = list(units_per_stage)
 
         for stage_num in range(0, 3):
             for unit_num in range(0, self.channel[stage_num]):
@@ -99,3 +104,12 @@ class Q_ResBlockBn(nn.Module):
 def q_resnet20(model=None):
     net = Q_ResNet20(model)
     return net
+
+def q_resnet32(model=None):
+    return Q_ResNet20(model, units_per_stage=(5, 5, 5))
+
+def q_resnet44(model=None):
+    return Q_ResNet20(model, units_per_stage=(7, 7, 7))
+
+def q_resnet56(model=None):
+    return Q_ResNet20(model, units_per_stage=(9, 9, 9))
