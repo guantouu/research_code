@@ -7,7 +7,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from utils.common_utils import process_config
 from datetime import datetime
-from utils.strip_utils import compute_strip_importances
+from utils.strip_utils import compute_strip_importances, aggregate_layer_trace, layer_quant_perturbation
 from utils.bit_allocation import allocate_bits
 import json
 from models import dataset, registry
@@ -52,7 +52,7 @@ def main():
     # It depends on the bit pair through the quantization error, so other pairs than 8/4 set a tag (e.g. "8_2")
     suffix = f"_{configs.tag}" if configs.get('tag') else ''
     os.makedirs('saliency', exist_ok=True)
-    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.saliency}{suffix}.json')
+    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.get("saliency", "quant_perturbation")}{suffix}.json')
     with open(saliency_file, 'w') as json_file:
         json.dump(saliency, json_file)
     logging.info(f'Saliency saved to {saliency_file}')
@@ -67,15 +67,20 @@ def main():
     validate(val_loader, model, criterion, configs)
 
 def hessian_trace(model, dataloader, criterion, configs):
-    importances, strip_importances_per_layer = compute_strip_importances(
-        model, dataloader, criterion, configs.bits, saliency=configs.saliency,
+    importances, strip_importances_per_layer, strip_traces_per_layer = compute_strip_importances(
+        model, dataloader, criterion, configs.bits, saliency=configs.get('saliency', 'quant_perturbation'),
         max_iters=configs.hutchinson_max_iters, min_iters=configs.hutchinson_min_iters,
-        tol=configs.hutchinson_tol, seed=configs.seed)
+        tol=configs.hutchinson_tol, seed=configs.seed, return_traces=True)
+    modules = list(strip_importances_per_layer)
+    layer_saliency = layer_quant_perturbation(model, configs.bits, modules,
+                                              aggregate_layer_trace(strip_traces_per_layer, modules))
     saliency = {}
     for name, m in model.named_modules():
         if m in strip_importances_per_layer:
             saliency[registry.saliency_key(name, configs.dataset)] = {'strip_len': m.in_channels,
-                                                       'saliency': strip_importances_per_layer[m]}
+                                                       'saliency': strip_importances_per_layer[m],
+                                                       'trace': strip_traces_per_layer[m],
+                                                       'layer_saliency': layer_saliency[m]}
     return saliency
 
 def validate(val_loader, model, criterion, configs):

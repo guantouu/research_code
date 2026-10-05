@@ -13,7 +13,8 @@
     "bias_bit": 32,
     "allocators": [
         "saliency",
-        "random"
+        "random",
+        "hawqv2_layer"
     ],
     "seed": 0,
     "search": "grid",

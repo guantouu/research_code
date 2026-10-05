@@ -1,6 +1,6 @@
 """
 Overnight ImageNet PTQ (8/2) pipeline for several networks, in priority order:
-convert (check published accuracy) -> Hessian saliency -> ratio sweep (saliency + random seeds 0-2)
+convert (check published accuracy) -> Hessian saliency -> ratio sweep (saliency + random seeds 0-2, hawqv2_layer in seed 0)
 -> hardware evaluation (NeuroSIM, CPU) launched in the background while the next network uses the GPU.
 Every step is skipped if its output exists, so the script can be re-run after an interruption.
 Progress: log/runs/imagenet_status.txt; per-step logs: log/runs/imagenet_<net>_<step>.out.
@@ -79,6 +79,11 @@ def main():
             path = write(c, os.path.join(CFG, 'hessian_trace_{}.json'.format(net)))
             if not run(net, 'hessian', ['python', 'strip_wise_hessian_trace.py', '--config', path]):
                 continue
+        elif 'layer_saliency' not in next(iter(json.load(open(saliency)).values())):
+            # saliency from before the hawqv2_layer baseline: add the layer scores without a new Hessian run
+            if not run(net, 'layer_saliency', ['python', 'scripts/add_layer_saliency.py', '--saliency_file', saliency,
+                                               '--config', os.path.join(CFG, 'hessian_trace_{}.json'.format(net))]):
+                continue
         failed = False
         for seed in [0, 1, 2]:
             if os.path.exists(sweep_results(net, seed)):
@@ -95,7 +100,8 @@ def main():
         designs = [{'name': 'all8', 'uniform': 8}]
         for r in choose_ratios(net):
             designs += [{'name': 'saliency_{}'.format(r), 'allocator': 'saliency', 'ratio': r},
-                        {'name': 'random_{}'.format(r), 'allocator': 'random', 'ratio': r}]
+                        {'name': 'random_{}'.format(r), 'allocator': 'random', 'ratio': r},
+                        {'name': 'hawqv2_layer_{}'.format(r), 'allocator': 'hawqv2_layer', 'ratio': r}]
         designs.append({'name': 'all2', 'uniform': 2})
         c = config('hardware_eval_{net}.json', net=net, saliency_file=saliency, designs=designs,
                    batch_size=EVAL_BATCH[net] // 4, max_parallel=len(designs))

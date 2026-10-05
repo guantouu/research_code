@@ -71,8 +71,9 @@ def main():
 
         record = {'allocator': allocator, 'ratio': ratio, 'acc1': acc1, 'bit_config_file': bit_config_file,
                   **bit_config_cost(bit_config, saliency, configs.bits)}
-        logging.info('=> [{}] ratio {:.4g}: acc {:.2f}, avg weight bits {:.3f}, high-bit strips {:.1%} ({:.0f}s)'.format(
-            allocator, ratio, acc1, record['avg_weight_bits'], record['high_strip_fraction'], time.time() - t))
+        logging.info('=> [{}] ratio {:.4g}: acc {:.2f}, avg weight bits {:.3f}, high-bit strips {:.1%}, low-bit weights {:.1%} ({:.0f}s)'.format(
+            allocator, ratio, acc1, record['avg_weight_bits'], record['high_strip_fraction'],
+            record['low_weight_fraction'], time.time() - t))
         return record, model
 
     float_model = registry.build_float_model(configs.net, num_classes, float_state, configs.dataset)
@@ -106,7 +107,7 @@ def main():
         group = [r for r in records if r['allocator'] == allocator]
         for r, flag in zip(group, pareto_front(group)):
             r['pareto'] = flag
-    fields = ['allocator', 'ratio', 'acc1', 'avg_weight_bits', 'high_strip_fraction', 'pareto'] + \
+    fields = ['allocator', 'ratio', 'acc1', 'avg_weight_bits', 'high_strip_fraction', 'low_weight_fraction', 'pareto'] + \
              (['select_acc1', 'qat_acc1', 'qat_model'] if configs.search == 'target' else []) + ['bit_config_file']
     with open(os.path.join(sweep_dir, 'results.csv'), 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')

@@ -70,7 +70,7 @@ def strip_quant_error(conv, fold_scale, bit):
         return (err ** 2).sum(dim=1)
 
 def compute_strip_importances(model, dataloader, criterion, bits, saliency='quant_perturbation',
-                              max_iters=100, min_iters=10, tol=0.05, seed=0, log=True):
+                              max_iters=100, min_iters=10, tol=0.05, seed=0, log=True, return_traces=False):
     """
     Hutchinson estimate of tr(H_ss) for every crossbar strip s = weight[o, :, kh, kw] of every Conv2d:
         tr(H_ss) = E_v[ v_s^T (Hv)_s ],  v ~ Rademacher
@@ -78,12 +78,18 @@ def compute_strip_importances(model, dataloader, criterion, bits, saliency='quan
     vector, sqrt(sum_s Var_s / t) / ||mean||, drops below tol, or at max_iters.
 
     Saliency of each strip (higher = keep at high bitwidth):
-        'quant_perturbation': loss saved by the high bitwidth over the low one (HAWQ-v2 style),
+        'quant_perturbation': the HAWQ-v2 quantization-perturbation sensitivity, extended from layer to
+            strip (ReRAM crossbar column) granularity; this is the formula used for all reported results:
             1/2 * tr(H_ss)/n_s * (||Q_low(w_s) - w_s||^2 - ||Q_high(w_s) - w_s||^2)
-        'weight_norm': loss of zeroing the strip (Hessian-aware pruning), tr(H_ss)/n_s * ||w_s||^2
+        'weight_norm': a Hessian-based pruning-style sensitivity (OBD/OBS-style), the loss of zeroing the
+            strip, tr(H_ss)/n_s * ||w_s||^2; kept only for ablation - not used for reported results.
+
+    With return_traces=True a third dict {module: [tr(H_ss) per strip]} is returned as well
+    (see aggregate_layer_trace).
     """
     importances = {}
     strip_importances_per_layer = {}
+    strip_traces_per_layer = {}
     known_modules = {"Conv2d"}
 
     was_training = model.training
@@ -134,5 +140,57 @@ def compute_strip_importances(model, dataloader, criterion, bits, saliency='quan
         tmp = strip_saliency.cpu().tolist()
         strip_importances_per_layer[m] = tmp
         importances[m] = (tmp, len(tmp))
+        strip_traces_per_layer[m] = mean[k].cpu().tolist()
 
+    if return_traces:
+        return importances, strip_importances_per_layer, strip_traces_per_layer
     return importances, strip_importances_per_layer
+
+def strip_traces_from_saliency(model, bits, modules, strip_saliency_per_layer):
+    """
+    Recover tr(H_ss) of every strip from an existing 'quant_perturbation' saliency (no new Hutchinson run):
+        tr(H_ss) = 2 * n_s * saliency_s / (||Q_low(w_s) - w_s||^2 - ||Q_high(w_s) - w_s||^2)
+    The quantization errors only depend on the weights. Strips whose error gain is ~0 (e.g. all-zero
+    strips) carry no trace information and get 0. Returns ({module: [trace per strip]}, number of such strips).
+    """
+    traces, num_unknown = {}, 0
+    for m in modules:
+        fold_scale = get_bn_fold_scale(model, m)
+        gain = (strip_quant_error(m, fold_scale, bits['insensitive']) -
+                strip_quant_error(m, fold_scale, bits['highly_sensitive'])).double()
+        saliency = torch.tensor(strip_saliency_per_layer[m], dtype=torch.float64, device=gain.device)
+        known = gain.abs() > 1e-12 * gain.abs().max().clamp(min=1e-30)
+        trace = torch.where(known, 2 * m.in_channels * saliency / torch.where(known, gain, torch.ones_like(gain)),
+                            torch.zeros_like(gain))
+        num_unknown += int((~known).sum())
+        traces[m] = trace.cpu().tolist()
+    return traces, num_unknown
+
+def aggregate_layer_trace(strip_importances_per_layer, modules):
+    """Sum the already-computed per-strip Hutchinson trace estimates back up to one
+    trace-sum per Conv2d layer. Reuses the existing per-strip samples — does NOT run a
+    new Hessian/Hutchinson estimation.
+
+    strip_importances_per_layer: {module: [tr(H_ss) per strip]}, i.e. the per-strip traces returned by
+    compute_strip_importances(..., return_traces=True) or strip_traces_from_saliency (not the saliencies).
+    The strips partition the layer, so the sum is the Hutchinson estimate of tr(H) of the whole layer.
+    """
+    return {m: float(sum(strip_importances_per_layer[m])) for m in modules}
+
+def layer_quant_perturbation(model, bits, modules, layer_trace_sum):
+    """HAWQ-v2 formula at full-layer granularity:
+    0.5 * (layer_trace_sum[m] / weight.numel()) *
+          (||Q_low(W_m) - W_m||^2 - ||Q_high(W_m) - W_m||^2)
+    for each Conv2d module m. Reuse get_bn_fold_scale()/strip_quant_error() logic, applied to
+    the whole weight tensor instead of per-strip slices.
+
+    The quantizer is the deployed one (QuantBnConv2d, per-strip scales), so ||Q_b(W_m) - W_m||^2 is the
+    sum of the strip errors; only the trace is averaged over the whole layer instead of per strip.
+    """
+    scores = {}
+    for m in modules:
+        fold_scale = get_bn_fold_scale(model, m)
+        gain = (strip_quant_error(m, fold_scale, bits['insensitive']).sum() -
+                strip_quant_error(m, fold_scale, bits['highly_sensitive']).sum()).item()
+        scores[m] = 0.5 * layer_trace_sum[m] / m.weight.numel() * gain
+    return scores

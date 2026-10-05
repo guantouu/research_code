@@ -28,6 +28,11 @@
             "ratio": 0.5
         },
         {
+            "name": "hawqv2_layer_0.5",
+            "allocator": "hawqv2_layer",
+            "ratio": 0.5
+        },
+        {
             "name": "saliency_0.7",
             "allocator": "saliency",
             "ratio": 0.7
@@ -35,6 +40,11 @@
         {
             "name": "random_0.7",
             "allocator": "random",
+            "ratio": 0.7
+        },
+        {
+            "name": "hawqv2_layer_0.7",
+            "allocator": "hawqv2_layer",
             "ratio": 0.7
         },
         {

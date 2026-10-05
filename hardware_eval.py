@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 from models import dataset
 from utils.common_utils import process_config
-from utils.bit_allocation import allocate_bits
+from utils.bit_allocation import allocate_bits, bit_config_cost
 from fine_tuning import validate
 from ratio_sweep import build_quant_model
 from utee import hook
@@ -98,7 +98,9 @@ def main():
         record_name = '{}_{}_{}_{}'.format(configs.net, configs.dataset, configs.exp_name, design['name'])
         export_trace(model, trace_images, record_name, configs)
         records.append({'design': design['name'], 'acc1': acc1, 'avg_weight_bits': avg_weight_bits(bit_config, saliency),
-                        'high_strip_fraction': high_strip_fraction(bit_config), 'record_name': record_name})
+                        'high_strip_fraction': high_strip_fraction(bit_config),
+                        'low_weight_fraction': bit_config_cost(bit_config, saliency, configs.bits)['low_weight_fraction'],
+                        'record_name': record_name})
         logging.info('=> [{}] acc {:.2f}, avg weight bits {:.3f}, trace in layer_record_{}'.format(
             design['name'], acc1, records[-1]['avg_weight_bits'], record_name))
 
