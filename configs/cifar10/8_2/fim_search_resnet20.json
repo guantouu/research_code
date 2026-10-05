@@ -36,6 +36,9 @@
     "fim_threshold": 200,
     "evaluate_accuracy": true,
     "hardware_config": "/app/configs/cifar10/8_2/hardware_eval_resnet20.json",
-    "crossbar_search": true,
-    "crossbar_scan_points": 16
+    "budget_search": [
+        "crossbars",
+        "energy"
+    ],
+    "budget_scan_points": 16
 }

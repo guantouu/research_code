@@ -1,5 +1,5 @@
 """
-Global mixed-precision ratio search on the diagonal empirical Fisher (paper Sec. 4.2).
+Global mixed-precision ratio search on the Fisher diagonal (paper Sec. 4.2).
 
 The strip ranking of each allocator is fixed (it comes from the saliency file); only the global ratio r
 (fraction of weights at the low bitwidth) is searched, over a 1-D grid. For every r:
@@ -16,14 +16,19 @@ Outputs in {logdir}/{net}/{dataset}/fim_search/{exp_name}/: results.csv (every g
 hardware_config, with the designs replaced), to be run separately for real NeuroSIM numbers.
 Crossbar-capacity alignment is not part of the ratio search: set "snap_to_crossbar" in that hardware config.
 
-With "crossbar_search": true, the allocation is also optimized directly in crossbars for a dual-crossbar chip
-(high-bit and low-bit strips in separate arrays; geometry from hardware_config: rows = subArray, columns and
-cellBit from its Param.cpp): for a crossbar budget, crossbar_optimal_allocation picks per layer the number of
-high-bit strips (best saliency first) that maximizes the total saliency (exact knapsack DP), so a partly used
-crossbar is filled with the next-best strips or given up when they are not worth it; a binary search over the
-budget (an even scan, then bisection below the first passing budget) finds the fewest crossbars whose relative
-delta FIM is <= fim_threshold (allocator 'crossbar_opt'). Every grid point also reports its dual_crossbars count,
-and 'min_crossbars' in selected.json is the passing config with the fewest crossbars over everything evaluated.
+Budget search ("budget_search": ["crossbars", "energy"]) optimizes the allocation directly for a dual-crossbar
+chip (high-bit and low-bit strips in separate arrays; geometry from hardware_config: rows = subArray, columns and
+cellBit from its Param.cpp). For a budget it picks per layer how many strips are high-bit (best saliency first)
+so that the total saliency of the high-bit strips is largest:
+    crossbars  crossbar_optimal_allocation: budget in crossbars, exact knapsack DP; a partly used crossbar is
+               filled with the next-best strips, or given up when they are not worth it
+    energy     energy_optimal_allocation: budget in column reads (output positions x used columns, which
+               NeuroSIM's energy follows), greedy by saliency per extra column read (within one strip of optimal)
+delta FIM is noisy near the threshold, so for each cost an even scan of budgets is followed by bisection below
+the first passing one, and the smallest passing budget is kept ('crossbar_opt' / 'energy_opt'). Every record
+also reports dual_crossbars and column_reads; 'min_dual_crossbars' / 'min_column_reads' in selected.json are the
+passing configs with the fewest crossbars / column reads over everything evaluated. ("crossbar_search": true
+is the same as "budget_search": ["crossbars"].)
 """
 import argparse
 import csv
@@ -37,7 +42,9 @@ import torch.nn as nn
 from models import dataset, registry
 from modules.conv import QuantBnConv2d
 from utils.common_utils import process_config
-from utils.bit_allocation import allocate_bits, bit_config_cost, bit_config_crossbars, crossbar_options, crossbar_optimal_allocation
+from utils.bit_allocation import (allocate_bits, bit_config_cost, bit_config_crossbars, crossbar_options,
+                                  crossbar_optimal_allocation, bit_config_column_reads, dual_column_reads,
+                                  energy_optimal_allocation)
 from utils.fisher_utils import compute_fisher_diag, fisher_distance, fisher_norm
 from utils.hardware_proxy import conv_output_positions, estimate_hardware_proxy
 from ratio_sweep import build_quant_model
@@ -88,6 +95,7 @@ def main():
         proxy = estimate_hardware_proxy(bit_config, net_structure, saliency)
         if geometry is not None:
             proxy['dual_crossbars'] = bit_config_crossbars(bit_config, saliency, configs.bits, geometry)
+            proxy['column_reads'] = bit_config_column_reads(bit_config, net_structure, configs.bits, geometry)
         return proxy
 
     def fisher_fn(model, params):
@@ -110,11 +118,14 @@ def main():
         records += search_pareto(allocator, keys, baseline_fisher, fisher_fn, bit_config_fn, build_fn,
                                  configs.r_grid, hardware_proxy_fn, accuracy_fn, saliency, configs.bits, out_dir)
 
-    if configs.get('crossbar_search', False):
-        cb_records, cb_best = search_crossbar_budget(saliency, configs.bits, geometry, keys, baseline_fisher, fisher_fn,
-                                                     build_fn, hardware_proxy_fn, accuracy_fn, configs.fim_threshold, out_dir,
-                                                     configs.get('crossbar_scan_points', 16))
-        records += cb_records
+    costs = configs.get('budget_search', ['crossbars'] if configs.get('crossbar_search', False) else [])
+    budget_best = {}
+    for cost in costs:
+        allocate, lo, hi, step = budget_allocator(cost, saliency, configs.bits, geometry, net_structure)
+        cost_records, budget_best[cost] = search_budget(
+            BUDGET_NAMES[cost], allocate, lo, hi, step, keys, baseline_fisher, fisher_fn, build_fn, hardware_proxy_fn,
+            accuracy_fn, saliency, configs.bits, configs.fim_threshold, out_dir, configs.get('budget_scan_points', 16))
+        records += cost_records
 
     selected = {}
     for allocator in configs.allocators:
@@ -129,16 +140,16 @@ def main():
             selected[allocator]['avg_weight_bits']))
 
     fields = ['allocator', 'ratio', 'budget', 'low_weight_fraction', 'avg_weight_bits', 'column_read_weighted_bits',
-              'dual_crossbars', 'delta_fim', 'rel_delta_fim', 'acc1', 'pareto', 'selected', 'bit_config_file']
-    if configs.get('crossbar_search', False):
-        overall = min_crossbars(records, configs.fim_threshold)
-        for name, best in [('crossbar_opt', cb_best), ('min_crossbars', overall)]:
+              'dual_crossbars', 'column_reads', 'delta_fim', 'rel_delta_fim', 'acc1', 'pareto', 'selected', 'bit_config_file']
+    for cost in costs:
+        for name, best in [(BUDGET_NAMES[cost], budget_best[cost]),
+                           ('min_' + COST_KEYS[cost], min_cost(records, COST_KEYS[cost], configs.fim_threshold))]:
             if best is None:
                 continue
             best['selected'] = True
             selected[name] = dict(best)
-            logging.info('=> [{}] {} crossbars from {} (relative delta FIM {:.4g}, threshold {}), avg weight bits {:.3f}'.format(
-                name, best['dual_crossbars'], best['allocator'] if best['ratio'] is None else
+            logging.info('=> [{}] {} {} from {} (relative delta FIM {:.4g}, threshold {}), avg weight bits {:.3f}'.format(
+                name, best[COST_KEYS[cost]], COST_KEYS[cost], best['allocator'] if best['ratio'] is None else
                 '{} r {:.4g}'.format(best['allocator'], best['ratio']), best['rel_delta_fim'], configs.fim_threshold,
                 best['avg_weight_bits']))
 
@@ -204,61 +215,78 @@ def evaluate_bit_config(name, bit_config, keys, baseline_fisher, base_norm, fish
     torch.cuda.empty_cache()
     return record
 
-def search_crossbar_budget(saliency, bits, geometry, keys, baseline_fisher, fisher_fn, build_fn, hardware_proxy_fn,
-                           accuracy_fn, threshold, out_dir, scan_points=16):
+BUDGET_NAMES = {'crossbars': 'crossbar_opt', 'energy': 'energy_opt'}
+COST_KEYS = {'crossbars': 'dual_crossbars', 'energy': 'column_reads'}
+
+def budget_allocator(cost, saliency, bits, geometry, net_structure):
     """
-    Fewest dual crossbars whose optimal allocation (crossbar_optimal_allocation) keeps the relative delta FIM
-    <= threshold. delta FIM is noisy near the threshold (not monotone in the budget), so a binary search
-    alone can stop on the wrong side: scan_points budgets evenly spaced between the all-low-bit and
-    all-high-bit crossbar counts are evaluated first, then the gap below the smallest passing one is
-    bisected, and the smallest evaluated budget that passes is selected.
+    (allocate(budget) -> (bit_config, used), smallest budget, largest budget, bisection resolution) of a
+    dual-crossbar cost: 'crossbars' (crossbar_optimal_allocation) or 'energy' (column reads,
+    energy_optimal_allocation). The range runs from all strips low-bit to all strips high-bit.
+    """
+    if cost == 'crossbars':
+        options = crossbar_options(saliency, bits, geometry)
+        lo = sum(o[0][0] for o in options.values())
+        hi = sum(o[-1][0] for o in options.values())
+        return (lambda b: crossbar_optimal_allocation(saliency, bits, b, geometry, options)), lo, hi, 1
+    if cost == 'energy':
+        lo = sum(dual_column_reads(len(s['saliency']), 0, net_structure[n], bits, geometry) for n, s in saliency.items())
+        hi = sum(dual_column_reads(len(s['saliency']), len(s['saliency']), net_structure[n], bits, geometry)
+                 for n, s in saliency.items())
+        return (lambda b: energy_optimal_allocation(saliency, bits, b, net_structure, geometry)), lo, hi, max(1, (hi - lo) // 1000)
+    raise ValueError('Unknown budget cost: {} (crossbars or energy)'.format(cost))
+
+def search_budget(name, allocate, lo, hi, step, keys, baseline_fisher, fisher_fn, build_fn, hardware_proxy_fn,
+                  accuracy_fn, saliency, bits, threshold, out_dir, scan_points=16):
+    """
+    Smallest budget whose allocation keeps the relative delta FIM <= threshold. delta FIM is noisy near the
+    threshold (not monotone in the budget), so a binary search alone can stop on the wrong side: scan_points
+    budgets evenly spaced over [lo, hi] are evaluated first, then the gap below the smallest passing one is
+    bisected down to step, and the smallest evaluated budget that passes is selected.
     Returns (records of every evaluated budget, record of the selected budget or None if none passes).
     """
-    options = crossbar_options(saliency, bits, geometry)
-    lo = sum(o[0][0] for o in options.values())
-    hi = sum(o[-1][0] for o in options.values())
     base_norm = fisher_norm(baseline_fisher)
     records = {}
 
     def evaluate(budget):
         if budget not in records:
             t = time.time()
-            bit_config, used = crossbar_optimal_allocation(saliency, bits, budget, geometry, options)
-            records[budget] = {'allocator': 'crossbar_opt', 'ratio': None, 'budget': budget,
-                               **evaluate_bit_config('crossbar_opt_{}'.format(budget), bit_config, keys, baseline_fisher,
+            bit_config, used = allocate(budget)
+            records[budget] = {'allocator': name, 'ratio': None, 'budget': budget,
+                               **evaluate_bit_config('{}_{}'.format(name, budget), bit_config, keys, baseline_fisher,
                                                      base_norm, fisher_fn, build_fn, hardware_proxy_fn, accuracy_fn,
                                                      saliency, bits, out_dir)}
             r = records[budget]
-            logging.info('=> [crossbar_opt] budget {} ({} used): relative delta FIM {:.4g}, avg weight bits {:.3f}{} ({:.0f}s)'.format(
-                budget, used, r['rel_delta_fim'], r['avg_weight_bits'],
+            logging.info('=> [{}] budget {} ({} used): relative delta FIM {:.4g}, avg weight bits {:.3f}{} ({:.0f}s)'.format(
+                name, budget, used, r['rel_delta_fim'], r['avg_weight_bits'],
                 '' if r['acc1'] is None else ', acc {:.2f}'.format(r['acc1']), time.time() - t))
         return records[budget]['rel_delta_fim'] <= threshold
 
-    logging.info('=> [crossbar_opt] dual-crossbar geometry {}, budget {}..{} crossbars'.format(geometry, lo, hi))
+    logging.info('=> [{}] budget {}..{}'.format(name, lo, hi))
     scan = sorted({lo + round(i * (hi - lo) / (scan_points - 1)) for i in range(scan_points)})
     passing = [b for b in scan if evaluate(b)]
     if passing:
         below = [b for b in scan if b < passing[0]]
         fail, ok = (below[-1], passing[0]) if below else (None, passing[0])
-        while fail is not None and ok - fail > 1:
+        while fail is not None and ok - fail > step:
             mid = (fail + ok) // 2
             if evaluate(mid):
                 ok = mid
             else:
                 fail = mid
     ordered = [records[b] for b in sorted(records)]
-    best = min_crossbars(ordered, threshold)
+    best = min_cost(ordered, 'budget', threshold)
     if best is None:
-        logging.info('=> [crossbar_opt] no budget reaches relative delta FIM <= {}'.format(threshold))
+        logging.info('=> [{}] no budget reaches relative delta FIM <= {}'.format(name, threshold))
     return ordered, best
 
-def min_crossbars(records, threshold):
+def min_cost(records, key, threshold):
     """
-    Record with the fewest dual crossbars among those whose relative delta FIM is <= threshold
-    (ties: lower delta FIM); None if there is none.
+    Record with the smallest key (e.g. dual_crossbars, column_reads) among those whose relative delta FIM is
+    <= threshold (ties: lower delta FIM); None if there is none.
     """
-    ok = [r for r in records if r['rel_delta_fim'] <= threshold]
-    return min(ok, key=lambda r: (r['dual_crossbars'], r['rel_delta_fim'])) if ok else None
+    ok = [r for r in records if r.get(key) is not None and r['rel_delta_fim'] <= threshold]
+    return min(ok, key=lambda r: (r[key], r['rel_delta_fim'])) if ok else None
 
 def crossbar_geometry(hardware_config):
     """
@@ -300,10 +328,10 @@ def write_hardware_config(configs, selected, out_dir):
     designs = [{'name': 'all{}'.format(high), 'uniform': high}]
     seen = set()
     for a, r in selected.items():
-        if r['bit_config_file'] in seen:   # min_crossbars is one of the other selections
+        if r['bit_config_file'] in seen:   # min_* is one of the other selections
             continue
         seen.add(r['bit_config_file'])
-        if r.get('ratio') is None:   # crossbar_opt: no ratio, use the saved bit config
+        if r.get('ratio') is None:   # budget search: no ratio, use the saved bit config
             designs.append({'name': '{}_{}'.format(a, r['budget']), 'bit_config_file': r['bit_config_file']})
         else:
             designs.append({'name': '{}_{}'.format(r['allocator'], r['ratio']), 'allocator': r['allocator'], 'ratio': r['ratio']})

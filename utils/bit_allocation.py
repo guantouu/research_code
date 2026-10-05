@@ -257,3 +257,51 @@ def crossbar_optimal_allocation(saliency, bits, budget, geometry, options=None):
         high[order[:q]] = True
         bit_config[name] = [bits['highly_sensitive'] if h else bits['insensitive'] for h in high.tolist()]
     return {n: bit_config[n] for n in names}, used
+
+def dual_column_reads(num_strips, num_high, positions, bits, geometry):
+    """
+    Column reads of one layer in a dual-crossbar chip: every output position reads each used column once,
+    and a b-bit strip has ceil(b / cell_bit) columns. NeuroSIM's energy follows the column reads, not the
+    number of crossbars (see utils.hardware_proxy).
+    """
+    cols_high = math.ceil(bits['highly_sensitive'] / geometry['cell_bit'])
+    cols_low = math.ceil(bits['insensitive'] / geometry['cell_bit'])
+    return positions * (num_high * cols_high + (num_strips - num_high) * cols_low)
+
+def bit_config_column_reads(bit_config, net_structure, bits, geometry):
+    """
+    Total dual-crossbar column reads of a bit config; net_structure = {layer: output positions}.
+    """
+    return sum(dual_column_reads(len(b), b.count(bits['highly_sensitive']), net_structure[n], bits, geometry)
+               for n, b in bit_config.items())
+
+def energy_optimal_allocation(saliency, bits, budget, net_structure, geometry):
+    """
+    Bit config with at most budget column reads (dual crossbar, see dual_column_reads) that maximizes the
+    total saliency of its high-bit strips (floored at a small eps, as in crossbar_options). Raising a strip
+    costs a fixed number of extra column reads in its layer, so this is a knapsack with additive costs:
+    strips are raised in decreasing saliency per extra column read until the budget is reached. This is
+    optimal for the fractional problem and within one strip of the integer optimum; within a layer the
+    order is the saliency order, and the high-bit set only grows with the budget.
+    Returns (bit_config, column reads used).
+    """
+    eps = 1e-6 * max(max(s['saliency']) for s in saliency.values())
+    names = list(saliency)
+    base = sum(dual_column_reads(len(saliency[n]['saliency']), 0, net_structure[n], bits, geometry) for n in names)
+    if budget < base:
+        raise ValueError('Budget {} is below the {} column reads of all low-bit strips'.format(budget, base))
+    gain = torch.cat([torch.tensor(saliency[n]['saliency'], dtype=torch.float64).clamp(min=eps) for n in names])
+    extra = torch.cat([torch.full((len(saliency[n]['saliency']),),
+                                  float(dual_column_reads(1, 1, net_structure[n], bits, geometry) -
+                                        dual_column_reads(1, 0, net_structure[n], bits, geometry)), dtype=torch.float64)
+                       for n in names])
+    order = torch.sort(gain / extra, descending=True, stable=True).indices
+    taken = base + torch.cumsum(extra[order], 0) <= budget
+    high = torch.zeros(gain.numel(), dtype=torch.bool)
+    high[order[taken]] = True
+    bit_config, start = {}, 0
+    for n in names:
+        size = len(saliency[n]['saliency'])
+        bit_config[n] = [bits['highly_sensitive'] if h else bits['insensitive'] for h in high[start:start + size].tolist()]
+        start += size
+    return bit_config, int(base + extra[order[taken]].sum())
