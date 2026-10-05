@@ -7,6 +7,9 @@ import csv
 from modules.conv import QuantBnConv2d
 from modules.quantizer import weight_to_strips
 
+# NeuroSIM binary written into trace_command.sh, relative to the repo root (build it with setup_runpod.sh)
+NEUROSIM_MAIN = './NeuroSim/Inference_pytorch/NeuroSIM/main'
+
 def Neural_Sim(self, input, output):
     """
     Export one QuantBnConv2d as one NeuroSIM layer with strip-wise mixed precision.
@@ -145,7 +148,7 @@ def hardware_evaluation(model, wl_weight_, wl_activation, subArray, parallelRead
     if os.path.exists('./layer_record_'+str(model_name)+'/trace_command.sh'):
         os.remove('./layer_record_'+str(model_name)+'/trace_command.sh')
     f = open('./layer_record_'+str(model_name)+'/trace_command.sh', "w")
-    f.write('./NeuroSIM/main ./layer_record_'+str(model_name)+'/NetWork.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
+    f.write(NEUROSIM_MAIN+' ./layer_record_'+str(model_name)+'/NetWork.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
     f.close()
 
     for name, layer in model.named_modules():

@@ -11,8 +11,8 @@ A design is one of
     {"name": ..., "bit_config_file": "bit_config/xxx.json"}       an existing bit config
     {"name": ..., "model_file": "saliency_0.74.pth"}              a saved model (e.g. QAT from fine_tuning.py)
 
-Run from the repo root (the hook writes ./layer_record_* and calls ./NeuroSIM/main).
-NeuroSIM hardware parameters live in NeuroSIM/Param.cpp; a copy is saved with the results.
+Run from the repo root (the hook writes ./layer_record_* and calls ./NeuroSim/Inference_pytorch/NeuroSIM/main).
+NeuroSIM hardware parameters live in NeuroSim/Inference_pytorch/NeuroSIM/Param.cpp; a copy is saved with the results.
 """
 import os
 import argparse

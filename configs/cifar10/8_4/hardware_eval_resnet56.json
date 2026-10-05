@@ -37,6 +37,6 @@
     "wl_activate": 8,
     "subArray": 16,
     "parallelRead": 16,
-    "neurosim_dir": "NeuroSIM",
+    "neurosim_dir": "NeuroSim/Inference_pytorch/NeuroSIM",
     "max_parallel": 4
 }
