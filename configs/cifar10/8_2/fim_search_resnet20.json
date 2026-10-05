@@ -38,7 +38,13 @@
     "hardware_config": "/app/configs/cifar10/8_2/hardware_eval_resnet20.json",
     "budget_search": [
         "crossbars",
-        "energy"
+        "energy",
+        "adc"
     ],
-    "budget_scan_points": 16
+    "budget_scan_points": 16,
+    "energy_model": {
+        "per_crossbar_uJ": 0.0,
+        "per_adc_read_uJ": 9.03741555225942e-07,
+        "offset_uJ": 1.1086864722910081
+    }
 }

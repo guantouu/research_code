@@ -190,7 +190,7 @@ def bit_config_crossbars(bit_config, saliency, bits, geometry):
     return sum(int(dual_crossbar_cost(len(b), b.count(bits['highly_sensitive']), saliency[n]['strip_len'], bits, geometry))
                for n, b in bit_config.items())
 
-def crossbar_options(saliency, bits, geometry):
+def crossbar_options(saliency, bits, geometry, layer_cost=None):
     """
     Per layer, the efficient (cost, gain, q) choices of a dual-crossbar allocation: q = number of high-bit
     strips, taken in decreasing saliency within the layer; gain = their saliency sum, each strip counted at
@@ -199,6 +199,8 @@ def crossbar_options(saliency, bits, geometry):
     so free room in a crossbar is always filled with high-bit strips and the largest budget gives all-high.
     Choices that a cheaper (or equal-cost) choice matches on gain are dropped; at equal cost and gain the
     one with more high-bit strips is kept.
+    layer_cost(name, num_strips, q) -> integer cost tensor for q = 0..num_strips; default dual_crossbar_cost
+    (crossbars). crossbar_optimal_allocation solves the knapsack for any such integer cost.
     """
     eps = 1e-6 * max(max(s['saliency']) for s in saliency.values())
     options = {}
@@ -206,7 +208,8 @@ def crossbar_options(saliency, bits, geometry):
         scores = torch.sort(torch.tensor(s['saliency'], dtype=torch.float64), descending=True, stable=True).values
         gain = torch.cat([torch.zeros(1, dtype=torch.float64), torch.cumsum(scores.clamp(min=eps), 0)])
         q = torch.arange(scores.numel() + 1)
-        cost = dual_crossbar_cost(scores.numel(), q, s['strip_len'], bits, geometry)
+        cost = (dual_crossbar_cost(scores.numel(), q, s['strip_len'], bits, geometry) if layer_cost is None
+                else layer_cost(name, scores.numel(), q))
         order = sorted(range(q.numel()), key=lambda i: (int(cost[i]), -float(gain[i]), -int(q[i])))
         kept, best = [], -math.inf
         for i in order:
@@ -305,3 +308,75 @@ def energy_optimal_allocation(saliency, bits, budget, net_structure, geometry):
         bit_config[n] = [bits['highly_sensitive'] if h else bits['insensitive'] for h in high[start:start + size].tolist()]
         start += size
     return bit_config, int(base + extra[order[taken]].sum())
+
+def dual_adc_reads(num_strips, num_high, positions, strip_len, bits, geometry):
+    """
+    ADC conversions of one layer in a dual-crossbar chip: dual_column_reads times the row tiles, since a strip
+    longer than geometry['rows'] spans several subarrays whose columns are converted separately. This is what
+    the dual-crossbar NeuroSIM energy follows (scripts/fit_dual_energy.py: R^2 0.999 on ResNet20 8/2, against
+    0.98 without the row tiles and 0.92 with the crossbar count alone).
+    """
+    return dual_column_reads(num_strips, num_high, positions, bits, geometry) * math.ceil(strip_len / geometry['rows'])
+
+def bit_config_adc_reads(bit_config, net_structure, saliency, bits, geometry):
+    """
+    Total dual-crossbar ADC conversions of a bit config.
+    """
+    return sum(dual_adc_reads(len(b), b.count(bits['highly_sensitive']), net_structure[n], saliency[n]['strip_len'],
+                              bits, geometry) for n, b in bit_config.items())
+
+def dual_energy_model(bit_config, net_structure, saliency, bits, geometry, model):
+    """
+    Modeled dual-crossbar energy (uJ, before the merge cost): model['per_crossbar_uJ'] * crossbars +
+    model['per_adc_read_uJ'] * ADC conversions + model.get('offset_uJ', 0), fitted to NeuroSIM by
+    scripts/fit_dual_energy.py.
+    """
+    return (model.get('offset_uJ', 0.0) + model['per_crossbar_uJ'] * bit_config_crossbars(bit_config, saliency, bits, geometry) +
+            model['per_adc_read_uJ'] * bit_config_adc_reads(bit_config, net_structure, saliency, bits, geometry))
+
+def adc_energy_allocation(saliency, bits, budget, net_structure, geometry, model, units=20000):
+    """
+    Bit config with modeled energy (dual_energy_model, without the offset) at most budget uJ that maximizes the
+    total saliency of its high-bit strips (floored at eps as in crossbar_options).
+      per_crossbar_uJ == 0: the cost is additive per strip (extra ADC conversions of its layer), so strips are
+          raised in decreasing saliency per extra uJ: optimal for the fractional knapsack, within one strip of
+          the integer optimum, and the high-bit set grows with the budget.
+      per_crossbar_uJ > 0: the crossbar term makes the cost a step function of each layer's high-bit count, so
+          the exact multiple-choice knapsack DP of crossbar_optimal_allocation is used on the cost rounded to
+          units steps over the full range (optimal up to that rounding).
+    Returns (bit_config, modeled energy used in uJ).
+    """
+    alpha, beta = model['per_crossbar_uJ'], model['per_adc_read_uJ']
+    names = list(saliency)
+    if alpha == 0:
+        eps = 1e-6 * max(max(s['saliency']) for s in saliency.values())
+        base = sum(beta * dual_adc_reads(len(saliency[n]['saliency']), 0, net_structure[n], saliency[n]['strip_len'], bits, geometry)
+                   for n in names)
+        gain = torch.cat([torch.tensor(saliency[n]['saliency'], dtype=torch.float64).clamp(min=eps) for n in names])
+        extra = torch.cat([torch.full((len(saliency[n]['saliency']),),
+                                      beta * (dual_adc_reads(1, 1, net_structure[n], saliency[n]['strip_len'], bits, geometry) -
+                                              dual_adc_reads(1, 0, net_structure[n], saliency[n]['strip_len'], bits, geometry)),
+                                      dtype=torch.float64) for n in names])
+        order = torch.sort(gain / extra, descending=True, stable=True).indices
+        taken = base + torch.cumsum(extra[order], 0) <= budget * (1 + 1e-12)
+        high = torch.zeros(gain.numel(), dtype=torch.bool)
+        high[order[taken]] = True
+        bit_config, start = {}, 0
+        for n in names:
+            size = len(saliency[n]['saliency'])
+            bit_config[n] = [bits['highly_sensitive'] if h else bits['insensitive'] for h in high[start:start + size].tolist()]
+            start += size
+        return bit_config, float(base + extra[order[taken]].sum())
+
+    def layer_energy(name, num_strips, q):
+        s = saliency[name]
+        return (alpha * dual_crossbar_cost(num_strips, q, s['strip_len'], bits, geometry).double() +
+                beta * dual_adc_reads(num_strips, q, net_structure[name], s['strip_len'], bits, geometry).double())
+    full = sum(float(layer_energy(n, len(s['saliency']), torch.tensor(len(s['saliency'])))) for n, s in saliency.items())
+    unit = full / units
+    options = crossbar_options(saliency, bits, geometry,
+                               layer_cost=lambda name, num_strips, q: torch.round(layer_energy(name, num_strips, q) / unit).long())
+    min_units = sum(o[0][0] for o in options.values())
+    bit_config, _ = crossbar_optimal_allocation(saliency, bits, max(min_units, round(budget / unit)), geometry, options)
+    used = sum(float(layer_energy(n, len(b), torch.tensor(b.count(bits['highly_sensitive'])))) for n, b in bit_config.items())
+    return bit_config, used

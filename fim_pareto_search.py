@@ -22,8 +22,11 @@ cellBit from its Param.cpp). For a budget it picks per layer how many strips are
 so that the total saliency of the high-bit strips is largest:
     crossbars  crossbar_optimal_allocation: budget in crossbars, exact knapsack DP; a partly used crossbar is
                filled with the next-best strips, or given up when they are not worth it
-    energy     energy_optimal_allocation: budget in column reads (output positions x used columns, which
-               NeuroSIM's energy follows), greedy by saliency per extra column read (within one strip of optimal)
+    energy     energy_optimal_allocation: budget in column reads (output positions x used columns), greedy by
+               saliency per extra column read (within one strip of optimal)
+    adc        adc_energy_allocation: budget in modeled dual-crossbar energy, energy_model = {per_crossbar_uJ,
+               per_adc_read_uJ} fitted to dual_crossbar_eval.py results by scripts/fit_dual_energy.py (ADC
+               conversions = column reads x row tiles; R^2 0.999 on ResNet20 8/2, where the crossbar term was 0)
 delta FIM is noisy near the threshold, so for each cost an even scan of budgets is followed by bisection below
 the first passing one, and the smallest passing budget is kept ('crossbar_opt' / 'energy_opt'). Every record
 also reports dual_crossbars and column_reads; 'min_dual_crossbars' / 'min_column_reads' in selected.json are the
@@ -44,7 +47,8 @@ from modules.conv import QuantBnConv2d
 from utils.common_utils import process_config
 from utils.bit_allocation import (allocate_bits, bit_config_cost, bit_config_crossbars, crossbar_options,
                                   crossbar_optimal_allocation, bit_config_column_reads, dual_column_reads,
-                                  energy_optimal_allocation)
+                                  energy_optimal_allocation, bit_config_adc_reads, dual_energy_model,
+                                  adc_energy_allocation)
 from utils.fisher_utils import compute_fisher_diag, fisher_distance, fisher_norm
 from utils.hardware_proxy import conv_output_positions, estimate_hardware_proxy
 from ratio_sweep import build_quant_model
@@ -96,6 +100,10 @@ def main():
         if geometry is not None:
             proxy['dual_crossbars'] = bit_config_crossbars(bit_config, saliency, configs.bits, geometry)
             proxy['column_reads'] = bit_config_column_reads(bit_config, net_structure, configs.bits, geometry)
+            proxy['adc_reads'] = bit_config_adc_reads(bit_config, net_structure, saliency, configs.bits, geometry)
+            if configs.get('energy_model'):
+                proxy['model_energy_uJ'] = dual_energy_model(bit_config, net_structure, saliency, configs.bits, geometry,
+                                                             configs.energy_model)
         return proxy
 
     def fisher_fn(model, params):
@@ -121,7 +129,8 @@ def main():
     costs = configs.get('budget_search', ['crossbars'] if configs.get('crossbar_search', False) else [])
     budget_best = {}
     for cost in costs:
-        allocate, lo, hi, step = budget_allocator(cost, saliency, configs.bits, geometry, net_structure)
+        allocate, lo, hi, step = budget_allocator(cost, saliency, configs.bits, geometry, net_structure,
+                                                  configs.get('energy_model'))
         cost_records, budget_best[cost] = search_budget(
             BUDGET_NAMES[cost], allocate, lo, hi, step, keys, baseline_fisher, fisher_fn, build_fn, hardware_proxy_fn,
             accuracy_fn, saliency, configs.bits, configs.fim_threshold, out_dir, configs.get('budget_scan_points', 16))
@@ -140,7 +149,7 @@ def main():
             selected[allocator]['avg_weight_bits']))
 
     fields = ['allocator', 'ratio', 'budget', 'low_weight_fraction', 'avg_weight_bits', 'column_read_weighted_bits',
-              'dual_crossbars', 'column_reads', 'delta_fim', 'rel_delta_fim', 'acc1', 'pareto', 'selected', 'bit_config_file']
+              'dual_crossbars', 'column_reads', 'adc_reads', 'model_energy_uJ', 'delta_fim', 'rel_delta_fim', 'acc1', 'pareto', 'selected', 'bit_config_file']
     for cost in costs:
         for name, best in [(BUDGET_NAMES[cost], budget_best[cost]),
                            ('min_' + COST_KEYS[cost], min_cost(records, COST_KEYS[cost], configs.fim_threshold))]:
@@ -215,14 +224,15 @@ def evaluate_bit_config(name, bit_config, keys, baseline_fisher, base_norm, fish
     torch.cuda.empty_cache()
     return record
 
-BUDGET_NAMES = {'crossbars': 'crossbar_opt', 'energy': 'energy_opt'}
-COST_KEYS = {'crossbars': 'dual_crossbars', 'energy': 'column_reads'}
+BUDGET_NAMES = {'crossbars': 'crossbar_opt', 'energy': 'energy_opt', 'adc': 'adc_opt'}
+COST_KEYS = {'crossbars': 'dual_crossbars', 'energy': 'column_reads', 'adc': 'model_energy_uJ'}
 
-def budget_allocator(cost, saliency, bits, geometry, net_structure):
+def budget_allocator(cost, saliency, bits, geometry, net_structure, energy_model=None):
     """
     (allocate(budget) -> (bit_config, used), smallest budget, largest budget, bisection resolution) of a
-    dual-crossbar cost: 'crossbars' (crossbar_optimal_allocation) or 'energy' (column reads,
-    energy_optimal_allocation). The range runs from all strips low-bit to all strips high-bit.
+    dual-crossbar cost: 'crossbars' (crossbar_optimal_allocation), 'energy' (column reads,
+    energy_optimal_allocation) or 'adc' (modeled energy in nJ, adc_energy_allocation with energy_model).
+    The range runs from all strips low-bit to all strips high-bit; budgets are integers.
     """
     if cost == 'crossbars':
         options = crossbar_options(saliency, bits, geometry)
@@ -234,7 +244,19 @@ def budget_allocator(cost, saliency, bits, geometry, net_structure):
         hi = sum(dual_column_reads(len(s['saliency']), len(s['saliency']), net_structure[n], bits, geometry)
                  for n, s in saliency.items())
         return (lambda b: energy_optimal_allocation(saliency, bits, b, net_structure, geometry)), lo, hi, max(1, (hi - lo) // 1000)
-    raise ValueError('Unknown budget cost: {} (crossbars or energy)'.format(cost))
+    if cost == 'adc':
+        if not energy_model:
+            raise ValueError("budget_search 'adc' needs energy_model (scripts/fit_dual_energy.py)")
+        offset = energy_model.get('offset_uJ', 0.0)
+        def model_nJ(bit_config):
+            return (dual_energy_model(bit_config, net_structure, saliency, bits, geometry, energy_model) - offset) * 1e3
+        lo = int(model_nJ({n: [bits['insensitive']] * len(s['saliency']) for n, s in saliency.items()}))
+        hi = int(model_nJ({n: [bits['highly_sensitive']] * len(s['saliency']) for n, s in saliency.items()})) + 1
+        def allocate(budget):
+            bit_config, used = adc_energy_allocation(saliency, bits, budget * 1e-3, net_structure, geometry, energy_model)
+            return bit_config, round(used * 1e3)
+        return allocate, lo, hi, max(1, (hi - lo) // 1000)
+    raise ValueError('Unknown budget cost: {} (crossbars, energy or adc)'.format(cost))
 
 def search_budget(name, allocate, lo, hi, step, keys, baseline_fisher, fisher_fn, build_fn, hardware_proxy_fn,
                   accuracy_fn, saliency, bits, threshold, out_dir, scan_points=16):
