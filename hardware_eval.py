@@ -54,7 +54,7 @@ PARAMS = ['memcelltype', 'technode', 'cellBit', 'numColSubArray', 'levelOutput',
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/hardware_eval.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/8_4/hardware_eval_resnet20.json', required=False)
     args = parser.parse_args()
     configs = process_config(args.config)
 

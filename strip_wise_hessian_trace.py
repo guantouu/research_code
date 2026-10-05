@@ -14,7 +14,7 @@ from models import dataset, registry
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/hessian_trace.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/8_4/hessian_trace_resnet20.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')

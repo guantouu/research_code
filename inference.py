@@ -13,7 +13,7 @@ from utee import hook
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/inference.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/inference.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')

@@ -5,7 +5,7 @@ the traces are recovered from the saliencies (utils.strip_utils.strip_traces_fro
 Uses the FP32 model {logdir}/{net}/{dataset}/best.pth of the Hessian config that wrote the file
 (ImageNet: the torchvision weights, as in strip_wise_hessian_trace.py).
 Run from the repo root:
-    python scripts/add_layer_saliency.py --config configs/exp_for_cifar/bits_8_2/hessian_trace_resnet20.json
+    python scripts/add_layer_saliency.py --config configs/cifar10/8_2/hessian_trace_resnet20.json
 """
 import argparse
 import json

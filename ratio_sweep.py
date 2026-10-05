@@ -16,7 +16,7 @@ from utils import misc
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/ratio_sweep.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/8_4/ratio_sweep_resnet20.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')

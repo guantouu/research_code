@@ -18,7 +18,7 @@ HESSIAN_BATCH = {'resnet18': 64, 'resnet34': 64, 'resnet50': 32, 'resnet101': 32
                  'vgg11': 16, 'vgg13': 16, 'vgg16': 16, 'vgg19': 16}
 EVAL_BATCH = {net: (128 if net.startswith('vgg') else 256) for net in NETS}
 KNEE_DROPS = (10.0, 25.0)   # hardware ratios: largest ratio whose saliency accuracy is within each drop of all-8-bit
-CFG = 'configs/exp_for_imagenet'
+CFG = 'configs/imagenet/8_2'
 LOG = 'log/runs'
 STATUS = os.path.join(LOG, 'imagenet_status.txt')
 
@@ -39,7 +39,7 @@ def run(net, step, cmd):
 
 def config(name, **updates):
     """
-    Config derived from the ResNet18 one (configs/exp_for_imagenet/<name with resnet18>.json).
+    Config derived from the ResNet18 one (configs/imagenet/8_2/<name with resnet18>.json).
     """
     with open(os.path.join(CFG, name.format(net='resnet18'))) as f:
         c = json.load(f)

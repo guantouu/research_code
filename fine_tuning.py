@@ -16,7 +16,7 @@ from utils import misc
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/fine_tuning.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/fine_tuning.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')
