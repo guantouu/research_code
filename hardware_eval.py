@@ -10,6 +10,8 @@ A design is one of
     {"name": ..., "allocator": "saliency", "ratio": 0.74}         allocate_bits on the saliency file
     {"name": ..., "bit_config_file": "bit_config/xxx.json"}       an existing bit config
     {"name": ..., "model_file": "saliency_0.74.pth"}              a saved model (e.g. QAT from fine_tuning.py)
+A design with "mode": "dual_crossbar" is skipped here: dual_crossbar_eval.py evaluates it (separate high-bit and
+low-bit arrays). Designs without "mode" (or "mode": "uniform") use the single mixed array below.
 With "snap_to_crossbar": true in the config, the bit configs of allocator designs are aligned to whole
 subarrays first (utils.bit_allocation.snap_to_crossbar_capacity).
 
@@ -98,6 +100,11 @@ def main():
     # quantize, evaluate and export every design (GPU, sequential)
     records = []
     for design in configs.designs:
+        if design.get('mode', 'uniform') == 'dual_crossbar':
+            logging.info('=> [{}] dual-crossbar design: skipped, run dual_crossbar_eval.py'.format(design['name']))
+            continue
+        if design.get('mode', 'uniform') != 'uniform':
+            raise ValueError('Unknown mode {} of design {}'.format(design['mode'], design['name']))
         model, bit_config = build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir,
                                          int(neurosim_params['cellBit']))
         acc1 = float(validate(val_loader, model, criterion, configs))

@@ -21,21 +21,31 @@ def Neural_Sim(self, input, output):
     strip is two 4-bit column groups. Uniform 4-bit / 8-bit baselines use the same mapping.
     The input vectors are the activations at the kernel center, i.e. the input sampled with the
     layer stride; the other kernel positions read shifted copies of the same feature map.
+    With strip_bits set (hardware_evaluation), only the strips of those bitwidths are exported, and a
+    layer with none of them is left out of the trace (layers.txt lists the exported layers in order).
     """
     global model_n
     global wl_weight
     global wl_input
     global layer_info
+    global strip_bits
+    global layer_names
+
+    strips = weight_to_strips(self.weight_integer).cpu().data.numpy()
+    selected = [(strip, int(bit)) for strip, bit in zip(strips, self.weight_bit)
+                if strip_bits is None or int(bit) in strip_bits]
+    if not selected:
+        return
+    layer_names.append(str(self.name))
 
     input_file_name =  './layer_record_' + str(model_n) + '/input_' + str(self.name) + '.csv'
     weight_file_name =  './layer_record_' + str(model_n) + '/weight_' + str(self.name) + '.csv'
     with open('./layer_record_' + str(model_n) + '/trace_command.sh', "a") as f:
         f.write(weight_file_name+' '+input_file_name+' ')
 
-    strips = weight_to_strips(self.weight_integer).cpu().data.numpy()
     columns = []
-    for strip, bit in zip(strips, self.weight_bit):
-        columns.extend(strip_to_columns(strip, int(bit), wl_weight))
+    for strip, bit in selected:
+        columns.extend(strip_to_columns(strip, bit, wl_weight))
     weight_matrix = np.stack(columns, axis=1)   # [I, #column groups]
     # the values are multiples of 2^(1-wl_weight), which %.8g writes exactly and compactly
     np.savetxt(weight_file_name, weight_matrix, delimiter=",", fmt='%.8g')
@@ -124,23 +134,31 @@ def remove_hook_list(hook_handle_list):
     with open(filename, 'w') as file:
         writer = csv.writer(file)
         writer.writerows(layer_info)
+    with open('./layer_record_'+str(model_n)+'/layers.txt', 'w') as file:
+        file.write('\n'.join(layer_names) + '\n')
 
     for handle in hook_handle_list:
         handle.remove()
 
-def hardware_evaluation(model, wl_weight_, wl_activation, subArray, parallelRead, model_name):
+def hardware_evaluation(model, wl_weight_, wl_activation, subArray, parallelRead, model_name, strip_bits_=None):
     """
     wl_weight_ is the NeuroSIM synapse precision, i.e. the bitwidth of one column group (the low
     bitwidth of the strip bit config); higher-bitwidth strips use several column groups.
+    strip_bits_ (e.g. {8}) exports only the strips of those bitwidths (one array of a dual-crossbar chip,
+    see dual_crossbar_eval.py); None exports every strip.
     """
     global model_n
     global wl_weight
     global wl_input
     global layer_info
+    global strip_bits
+    global layer_names
     model_n = model_name
     wl_weight = wl_weight_
     wl_input = wl_activation
     layer_info = []
+    strip_bits = None if strip_bits_ is None else {int(b) for b in strip_bits_}
+    layer_names = []
 
     hook_handle_list = []
     if not os.path.exists('./layer_record_'+str(model_name)):
