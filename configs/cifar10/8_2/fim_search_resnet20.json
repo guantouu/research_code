@@ -1,0 +1,41 @@
+{
+    "exp_name": "fim_search_8_2",
+    "net": "resnet20",
+    "dataset": "cifar10",
+    "logdir": "/app/log",
+    "batch_size": 128,
+    "print_freq": 1000,
+    "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 2
+    },
+    "bias_bit": 32,
+    "seed": 0,
+    "allocators": [
+        "saliency",
+        "random",
+        "hawqv2_layer"
+    ],
+    "r_grid": [
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.8,
+        0.9,
+        1.0
+    ],
+    "fisher_samples": 2048,
+    "fisher_type": "true",
+    "fisher_mc_samples": 0,
+    "fim_threshold": 200,
+    "evaluate_accuracy": true,
+    "hardware_config": "/app/configs/cifar10/8_2/hardware_eval_resnet20.json",
+    "crossbar_search": true,
+    "crossbar_scan_points": 16
+}

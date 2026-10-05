@@ -123,3 +123,137 @@ def pareto_front(records, acc_key='acc1', cost_key='avg_weight_bits'):
                         (o[acc_key] > r[acc_key] or o[cost_key] < r[cost_key]) for o in records)
         flags.append(not dominated)
     return flags
+
+def snap_to_crossbar_capacity(bit_config, scores, bits, num_col_sub_array, column_bit, cell_bit):
+    """
+    Deterministic post-processing, called AFTER an r* has been selected and its bit_config
+    built via the existing allocator path — NOT part of fim_pareto_search.py's search loop.
+
+    utee/hook.py maps a b-bit strip to b / column_bit column groups of ceil(column_bit / cell_bit) cells,
+    and NeuroSIM tiles each layer's columns contiguously into subarrays of num_col_sub_array columns, so
+    a layer leaves its last subarray partly empty unless its cell-column count is a multiple of
+    num_col_sub_array (8/2 with cellBit 1: an 8-bit strip is 8 columns, a 2-bit strip 2, so a layer of
+    n strips with q high-bit ones has 2 (n + 3q) columns). For each mixed layer, q moves to the nearest
+    count that fills its subarrays (ties: more high-bit strips), flipping the strips nearest the cut of
+    scores ({layer: [score per strip]}, higher = keep high bits): the best low-bit strips are raised or
+    the worst high-bit strips lowered. Uniform layers are left as they are, so layer-granularity
+    configs stay per layer; a layer with no such count is left as it is.
+    Returns (new bit_config, number of flipped strips).
+    """
+    high, low = bits['highly_sensitive'], bits['insensitive']
+    def cells(b):
+        return (b // column_bit) * math.ceil(column_bit / cell_bit)
+    snapped, flipped = {}, 0
+    for name, layer_bits in bit_config.items():
+        n, q = len(layer_bits), layer_bits.count(high)
+        snapped[name] = list(layer_bits)
+        if q in (0, n):
+            continue
+        ok = [k for k in range(n + 1) if (n * cells(low) + k * (cells(high) - cells(low))) % num_col_sub_array == 0]
+        if not ok or q in ok:
+            continue
+        target = min(ok, key=lambda k: (abs(k - q), -k))
+        s = torch.tensor(scores[name], dtype=torch.float64)
+        is_high = torch.tensor([b == high for b in layer_bits])
+        if target > q:
+            cand = torch.nonzero(~is_high).flatten()
+            pick = cand[torch.sort(s[cand], descending=True, stable=True).indices[:target - q]]
+            new = high
+        else:
+            cand = torch.nonzero(is_high).flatten()
+            pick = cand[torch.sort(s[cand], stable=True).indices[:q - target]]
+            new = low
+        for i in pick.tolist():
+            snapped[name][i] = new
+        flipped += pick.numel()
+    return snapped, flipped
+
+def dual_crossbar_cost(num_strips, num_high, strip_len, bits, geometry):
+    """
+    Crossbars of one layer when its high-bit and low-bit strips sit in separate arrays (dual crossbar).
+    A b-bit strip takes ceil(b / cell_bit) columns (NeuroSIM's numColPerSynapse), columns are tiled
+    contiguously into crossbars of geometry['cols'] columns, and a strip of strip_len rows spans
+    ceil(strip_len / geometry['rows']) crossbars vertically. num_high may be an int or an integer tensor.
+    """
+    cols_high = math.ceil(bits['highly_sensitive'] / geometry['cell_bit'])
+    cols_low = math.ceil(bits['insensitive'] / geometry['cell_bit'])
+    row_tiles = math.ceil(strip_len / geometry['rows'])
+    num_high = torch.as_tensor(num_high)
+    col_tiles = (torch.div(num_high * cols_high + geometry['cols'] - 1, geometry['cols'], rounding_mode='floor') +
+                 torch.div((num_strips - num_high) * cols_low + geometry['cols'] - 1, geometry['cols'], rounding_mode='floor'))
+    return row_tiles * col_tiles
+
+def bit_config_crossbars(bit_config, saliency, bits, geometry):
+    """
+    Total dual-crossbar count of a bit config.
+    """
+    return sum(int(dual_crossbar_cost(len(b), b.count(bits['highly_sensitive']), saliency[n]['strip_len'], bits, geometry))
+               for n, b in bit_config.items())
+
+def crossbar_options(saliency, bits, geometry):
+    """
+    Per layer, the efficient (cost, gain, q) choices of a dual-crossbar allocation: q = number of high-bit
+    strips, taken in decreasing saliency within the layer; gain = their saliency sum, each strip counted at
+    least eps (eps = 1e-6 of the largest saliency). The floor matters because unconverged Hutchinson
+    estimates make some saliencies negative: they stay last in the order, but a strip never lowers the gain,
+    so free room in a crossbar is always filled with high-bit strips and the largest budget gives all-high.
+    Choices that a cheaper (or equal-cost) choice matches on gain are dropped; at equal cost and gain the
+    one with more high-bit strips is kept.
+    """
+    eps = 1e-6 * max(max(s['saliency']) for s in saliency.values())
+    options = {}
+    for name, s in saliency.items():
+        scores = torch.sort(torch.tensor(s['saliency'], dtype=torch.float64), descending=True, stable=True).values
+        gain = torch.cat([torch.zeros(1, dtype=torch.float64), torch.cumsum(scores.clamp(min=eps), 0)])
+        q = torch.arange(scores.numel() + 1)
+        cost = dual_crossbar_cost(scores.numel(), q, s['strip_len'], bits, geometry)
+        order = sorted(range(q.numel()), key=lambda i: (int(cost[i]), -float(gain[i]), -int(q[i])))
+        kept, best = [], -math.inf
+        for i in order:
+            if gain[i] > best:
+                kept.append((int(cost[i]), float(gain[i]), int(q[i])))
+                best = float(gain[i])
+        options[name] = kept
+    return options
+
+def crossbar_optimal_allocation(saliency, bits, budget, geometry, options=None):
+    """
+    Bit config with at most budget crossbars (dual crossbar, see dual_crossbar_cost) that maximizes the
+    total saliency of its high-bit strips: a multiple-choice knapsack (one choice of q per layer, the q
+    strips of highest saliency in the layer are high-bit), solved exactly by dynamic programming over the
+    crossbar count. Saliency is the loss saved by keeping a strip at the high bitwidth, so this is the
+    allocation of least estimated loss for that hardware (saliencies floored at a small eps, see
+    crossbar_options). Returns (bit_config, crossbars used).
+    """
+    options = options or crossbar_options(saliency, bits, geometry)
+    names = list(saliency)
+    min_total = sum(opts[0][0] for opts in options.values())
+    if budget < min_total:
+        raise ValueError('Budget {} is below the minimum of {} crossbars'.format(budget, min_total))
+    dp = torch.full((budget + 1,), -math.inf, dtype=torch.float64)
+    dp[0] = 0.0
+    choices = []
+    for name in names:
+        new = torch.full_like(dp, -math.inf)
+        pick = torch.full((budget + 1,), -1, dtype=torch.int32)
+        for j, (cost, gain, _) in enumerate(options[name]):
+            if cost > budget:
+                break
+            cand = torch.full_like(dp, -math.inf)
+            cand[cost:] = dp[:budget + 1 - cost] + gain
+            better = cand > new
+            new[better] = cand[better]
+            pick[better] = j
+        dp = new
+        choices.append(pick)
+    k = int(torch.argmax(dp))
+    used = k
+    bit_config = {}
+    for name, pick in zip(reversed(names), reversed(choices)):
+        cost, _, q = options[name][int(pick[k])]
+        k -= cost
+        order = torch.sort(torch.tensor(saliency[name]['saliency'], dtype=torch.float64), descending=True, stable=True).indices
+        high = torch.zeros(len(saliency[name]['saliency']), dtype=torch.bool)
+        high[order[:q]] = True
+        bit_config[name] = [bits['highly_sensitive'] if h else bits['insensitive'] for h in high.tolist()]
+    return {n: bit_config[n] for n in names}, used

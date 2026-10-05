@@ -10,6 +10,8 @@ A design is one of
     {"name": ..., "allocator": "saliency", "ratio": 0.74}         allocate_bits on the saliency file
     {"name": ..., "bit_config_file": "bit_config/xxx.json"}       an existing bit config
     {"name": ..., "model_file": "saliency_0.74.pth"}              a saved model (e.g. QAT from fine_tuning.py)
+With "snap_to_crossbar": true in the config, the bit configs of allocator designs are aligned to whole
+subarrays first (utils.bit_allocation.snap_to_crossbar_capacity).
 
 Run from the repo root (the hook writes ./layer_record_* and calls ./NeuroSim/Inference_pytorch/NeuroSIM/main).
 NeuroSIM hardware parameters live in NeuroSim/Inference_pytorch/NeuroSIM/Param.cpp; a copy is saved with the results.
@@ -27,9 +29,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn as nn
-from models import dataset
+from models import dataset, registry
 from utils.common_utils import process_config
-from utils.bit_allocation import allocate_bits, bit_config_cost
+from utils.bit_allocation import allocate_bits, bit_config_cost, snap_to_crossbar_capacity
+from utils.hardware_proxy import conv_output_positions, estimate_hardware_proxy
 from fine_tuning import validate
 from ratio_sweep import build_quant_model
 from utee import hook
@@ -89,17 +92,21 @@ def main():
     torch.cuda.set_device(0)
     criterion = nn.CrossEntropyLoss().cuda(0)
     trace_images, _ = next(iter(val_loader))
+    net_structure = conv_output_positions(registry.build_float_model(configs.net, num_classes, float_state, configs.dataset),
+                                          trace_images.shape[1:], configs.dataset)
 
     # quantize, evaluate and export every design (GPU, sequential)
     records = []
     for design in configs.designs:
-        model, bit_config = build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir)
+        model, bit_config = build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir,
+                                         int(neurosim_params['cellBit']))
         acc1 = float(validate(val_loader, model, criterion, configs))
         record_name = '{}_{}_{}_{}'.format(configs.net, configs.dataset, configs.exp_name, design['name'])
         export_trace(model, trace_images, record_name, configs)
         records.append({'design': design['name'], 'acc1': acc1, 'avg_weight_bits': avg_weight_bits(bit_config, saliency),
                         'high_strip_fraction': high_strip_fraction(bit_config),
                         'low_weight_fraction': bit_config_cost(bit_config, saliency, configs.bits)['low_weight_fraction'],
+                        'column_read_weighted_bits': estimate_hardware_proxy(bit_config, net_structure, saliency)['column_read_weighted_bits'],
                         'record_name': record_name})
         logging.info('=> [{}] acc {:.2f}, avg weight bits {:.3f}, trace in layer_record_{}'.format(
             design['name'], acc1, records[-1]['avg_weight_bits'], record_name))
@@ -121,7 +128,7 @@ def main():
 
     write_summary(records, configs, neurosim_params, out_dir)
 
-def build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir):
+def build_design(design, configs, num_classes, float_state, saliency, log_path, out_dir, cell_bit):
     """
     Quantized model and per-strip bit config of one design; the bit config is saved to out_dir.
     """
@@ -134,6 +141,15 @@ def build_design(design, configs, num_classes, float_state, saliency, log_path, 
             bit_config = {name: [design['uniform']] * len(s['saliency']) for name, s in saliency.items()}
         elif 'allocator' in design:
             bit_config = allocate_bits(design['allocator'], saliency, configs.bits, design['ratio'], seed=configs.seed)
+            if configs.get('snap_to_crossbar', False):
+                # flip the strips nearest the allocator's own cut: saliency order, or a seeded random order for random
+                g = torch.Generator().manual_seed(configs.seed)
+                scores = {n: (torch.rand(len(s['saliency']), generator=g).tolist() if design['allocator'] == 'random'
+                              else s['saliency']) for n, s in saliency.items()}
+                bit_config, flipped = snap_to_crossbar_capacity(bit_config, scores, configs.bits, configs.subArray,
+                                                                configs.wl_weight, cell_bit)
+                logging.info('=> [{}] snapped to whole {}-column subarrays: {} strips flipped'.format(
+                    design['name'], configs.subArray, flipped))
         elif 'bit_config_file' in design:
             with open(design['bit_config_file'], 'r') as f:
                 bit_config = json.load(f)
