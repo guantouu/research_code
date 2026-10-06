@@ -5,7 +5,7 @@
     "batch_size": 128,
     "logdir": "/app/log",
     "print_freq": 1000,
-    "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
+    "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_fisher_8_2.json",
     "bits": {
         "highly_sensitive": 8,
         "insensitive": 2

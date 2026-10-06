@@ -10,6 +10,8 @@ A design is one of
     {"name": ..., "allocator": "saliency", "ratio": 0.74}         allocate_bits on the saliency file
     {"name": ..., "bit_config_file": "bit_config/xxx.json"}       an existing bit config
     {"name": ..., "model_file": "saliency_0.74.pth"}              a saved model (e.g. QAT from fine_tuning.py)
+A design may set its own "saliency_file" (e.g. a baseline that must keep the Hessian traces while the config uses
+the Fisher ones); otherwise the config's saliency_file is used.
 A design with "mode": "dual_crossbar" is skipped here: dual_crossbar_eval.py evaluates it (separate high-bit and
 low-bit arrays). Designs without "mode" (or "mode": "uniform") use the single mixed array below.
 With "snap_to_crossbar": true in the config, the bit configs of allocator designs are aligned to whole
@@ -139,6 +141,9 @@ def build_design(design, configs, num_classes, float_state, saliency, log_path, 
     """
     Quantized model and per-strip bit config of one design; the bit config is saved to out_dir.
     """
+    if 'saliency_file' in design:
+        with open(design['saliency_file'], 'r') as f:
+            saliency = json.load(f)
     if 'model_file' in design:
         model = torch.load(os.path.join(log_path, design['model_file']), weights_only=False).cuda(0)
         bit_config = {name: [int(b) for b in m.weight_bit] for name, m in model.named_modules()

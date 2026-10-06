@@ -16,5 +16,6 @@
     "hutchinson_min_iters": 20,
     "hutchinson_tol": 0.05,
     "seed": 0,
-    "print_freq": 10
+    "print_freq": 10,
+    "trace_estimator": "hutchinson"
 }

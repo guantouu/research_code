@@ -1,20 +1,21 @@
 {
-    "exp_name": "ratio_sweep_8_2_seed1",
+    "exp_name": "ratio_sweep_8_2_hawq",
     "net": "resnet56",
     "dataset": "cifar10",
     "batch_size": 128,
     "logdir": "/app/log",
     "print_freq": 1000,
-    "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_fisher_8_2.json",
+    "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
     "bits": {
         "highly_sensitive": 8,
         "insensitive": 2
     },
     "bias_bit": 32,
     "allocators": [
-        "random"
+        "hawqv2_layer",
+        "hawqv2_ilp"
     ],
-    "seed": 1,
+    "seed": 0,
     "search": "grid",
     "ratios": [
         0.0,

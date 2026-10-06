@@ -7,7 +7,7 @@
     "print_freq": 1000,
     "bias_bit": 32,
     "seed": 0,
-    "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_8_2.json",
+    "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_fisher_8_2.json",
     "bits": {
         "highly_sensitive": 8,
         "insensitive": 2
@@ -30,7 +30,14 @@
         {
             "name": "hawqv2_layer_0.5",
             "allocator": "hawqv2_layer",
-            "ratio": 0.5
+            "ratio": 0.5,
+            "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_8_2.json"
+        },
+        {
+            "name": "hawqv2_ilp_0.5",
+            "allocator": "hawqv2_ilp",
+            "ratio": 0.5,
+            "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_8_2.json"
         },
         {
             "name": "saliency_0.6",
@@ -45,7 +52,14 @@
         {
             "name": "hawqv2_layer_0.6",
             "allocator": "hawqv2_layer",
-            "ratio": 0.6
+            "ratio": 0.6,
+            "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_8_2.json"
+        },
+        {
+            "name": "hawqv2_ilp_0.6",
+            "allocator": "hawqv2_ilp",
+            "ratio": 0.6,
+            "saliency_file": "saliency/vgg16_cifar10_quant_perturbation_8_2.json"
         },
         {
             "name": "all2",

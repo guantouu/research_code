@@ -70,7 +70,8 @@ def strip_quant_error(conv, fold_scale, bit):
         return (err ** 2).sum(dim=1)
 
 def compute_strip_importances(model, dataloader, criterion, bits, saliency='quant_perturbation',
-                              max_iters=100, min_iters=10, tol=0.05, seed=0, log=True, return_traces=False):
+                              max_iters=100, min_iters=10, tol=0.05, seed=0, log=True, return_traces=False,
+                              return_variance=False):
     """
     Hutchinson estimate of tr(H_ss) for every crossbar strip s = weight[o, :, kh, kw] of every Conv2d:
         tr(H_ss) = E_v[ v_s^T (Hv)_s ],  v ~ Rademacher
@@ -85,11 +86,13 @@ def compute_strip_importances(model, dataloader, criterion, bits, saliency='quan
             strip, tr(H_ss)/n_s * ||w_s||^2; kept only for ablation - not used for reported results.
 
     With return_traces=True a third dict {module: [tr(H_ss) per strip]} is returned as well
-    (see aggregate_layer_trace).
+    (see aggregate_layer_trace), and with return_variance=True also {module: [variance of that estimate]}
+    (sample variance / number of samples, see shrink_traces).
     """
     importances = {}
     strip_importances_per_layer = {}
     strip_traces_per_layer = {}
+    strip_trace_vars_per_layer = {}
     known_modules = {"Conv2d"}
 
     was_training = model.training
@@ -141,10 +144,60 @@ def compute_strip_importances(model, dataloader, criterion, bits, saliency='quan
         strip_importances_per_layer[m] = tmp
         importances[m] = (tmp, len(tmp))
         strip_traces_per_layer[m] = mean[k].cpu().tolist()
+        strip_trace_vars_per_layer[m] = (m2[k] / max(t - 1, 1) / t).cpu().tolist()
 
+    if return_traces and return_variance:
+        return importances, strip_importances_per_layer, strip_traces_per_layer, strip_trace_vars_per_layer
     if return_traces:
         return importances, strip_importances_per_layer, strip_traces_per_layer
     return importances, strip_importances_per_layer
+
+def shrink_traces(traces, variances):
+    """
+    Empirical-Bayes shrinkage of noisy per-strip Hutchinson traces toward their layer mean. Within a layer the
+    strip traces are modeled as true values spread with variance tau^2 around the layer mean mu, each observed
+    with its own estimation noise sigma_s^2 (variances, from compute_strip_importances(return_variance=True)):
+        tau^2   = max(Var_s(trace_s) - mean_s(sigma_s^2), 0)
+        trace_s <- mu + tau^2 / (tau^2 + sigma_s^2) * (trace_s - mu)
+    so an estimate dominated by noise is pulled to the layer mean and a precise one is kept; a layer whose spread
+    is all noise gets its mean for every strip. Unconverged Hutchinson estimates (relative std error ~0.6 after
+    200 samples) make many strip traces negative, which ranks those strips as the least sensitive.
+    traces, variances: {key: [value per strip]}. Returns {key: [shrunk trace per strip]}.
+    """
+    shrunk = {}
+    for k in traces:
+        t = torch.tensor(traces[k], dtype=torch.float64)
+        v = torch.tensor(variances[k], dtype=torch.float64)
+        mu = t.mean()
+        tau2 = (t.var(unbiased=True) - v.mean()).clamp(min=0) if t.numel() > 1 else torch.tensor(0.0, dtype=torch.float64)
+        weight = torch.where(tau2 + v > 0, tau2 / (tau2 + v), torch.ones_like(v))
+        shrunk[k] = (mu + weight * (t - mu)).tolist()
+    return shrunk
+
+def strip_fisher_traces(model, modules, dataloader, criterion, fisher_type='true', mc_samples=0, seed=0):
+    """
+    tr(F_ss) per strip of the Fisher diagonal of the conv weights (utils.fisher_utils.compute_fisher_diag,
+    true Fisher by default): a positive semi-definite (Gauss-Newton) approximation of tr(H_ss) at a minimum,
+    never negative and free of Hutchinson sampling noise. Returns {module: [trace per strip]}.
+    """
+    from utils.fisher_utils import compute_fisher_diag
+    fisher = compute_fisher_diag(model, [m.weight for m in modules], dataloader, criterion,
+                                 fisher_type=fisher_type, mc_samples=mc_samples, seed=seed)
+    return {m: weight_to_strips(f).sum(dim=1).cpu().tolist() for m, f in zip(modules, fisher)}
+
+def saliency_from_traces(model, bits, modules, traces):
+    """
+    'quant_perturbation' saliency of every strip from given per-strip traces:
+        1/2 * trace_s / n_s * (||Q_low(w_s) - w_s||^2 - ||Q_high(w_s) - w_s||^2)
+    traces: {module: [trace per strip]}. Returns {module: [saliency per strip]}.
+    """
+    saliency = {}
+    for m in modules:
+        fold_scale = get_bn_fold_scale(model, m)
+        gain = strip_quant_error(m, fold_scale, bits['insensitive']) - strip_quant_error(m, fold_scale, bits['highly_sensitive'])
+        trace = torch.tensor(traces[m], dtype=gain.dtype, device=gain.device)
+        saliency[m] = (0.5 * trace / m.in_channels * gain).cpu().tolist()
+    return saliency
 
 def strip_traces_from_saliency(model, bits, modules, strip_saliency_per_layer):
     """
