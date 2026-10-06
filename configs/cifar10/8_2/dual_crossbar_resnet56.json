@@ -1,13 +1,13 @@
 {
     "exp_name": "dual_8_2",
-    "net": "resnet20",
+    "net": "resnet56",
     "dataset": "cifar10",
     "logdir": "/app/log",
     "batch_size": 128,
     "print_freq": 1000,
     "bias_bit": 32,
     "seed": 0,
-    "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_fisher_8_2.json",
+    "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_fisher_8_2.json",
     "bits": {
         "highly_sensitive": 8,
         "insensitive": 2
@@ -34,40 +34,40 @@
             "name": "hawqv2_layer_0.5",
             "allocator": "hawqv2_layer",
             "ratio": 0.5,
-            "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+            "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
             "mode": "dual_crossbar"
         },
         {
             "name": "hawqv2_ilp_0.5",
             "allocator": "hawqv2_ilp",
             "ratio": 0.5,
-            "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+            "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
             "mode": "dual_crossbar"
         },
         {
-            "name": "saliency_0.3",
+            "name": "saliency_0.7",
             "allocator": "saliency",
-            "ratio": 0.3,
+            "ratio": 0.7,
             "mode": "dual_crossbar"
         },
         {
-            "name": "random_0.3",
+            "name": "random_0.7",
             "allocator": "random",
-            "ratio": 0.3,
+            "ratio": 0.7,
             "mode": "dual_crossbar"
         },
         {
-            "name": "hawqv2_layer_0.3",
+            "name": "hawqv2_layer_0.7",
             "allocator": "hawqv2_layer",
-            "ratio": 0.3,
-            "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+            "ratio": 0.7,
+            "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
             "mode": "dual_crossbar"
         },
         {
-            "name": "hawqv2_ilp_0.3",
+            "name": "hawqv2_ilp_0.7",
             "allocator": "hawqv2_ilp",
-            "ratio": 0.3,
-            "saliency_file": "saliency/resnet20_cifar10_quant_perturbation_8_2.json",
+            "ratio": 0.7,
+            "saliency_file": "saliency/resnet56_cifar10_quant_perturbation_8_2.json",
             "mode": "dual_crossbar"
         },
         {
