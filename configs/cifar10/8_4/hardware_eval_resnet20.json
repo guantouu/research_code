@@ -1,0 +1,28 @@
+{
+    "exp_name": "ptq_8_4",
+    "net": "resnet20",
+    "dataset": "cifar10",
+    "logdir": "/app/log",
+    "batch_size": 128,
+    "print_freq": 1000,
+    "bias_bit": 32,
+    "seed": 0,
+    "saliency_file": "saliency/resnet20_cifar10_quant_perturbation.json",
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 4
+    },
+    "designs": [
+        {"name": "all8", "uniform": 8},
+        {"name": "saliency_0.74", "allocator": "saliency", "ratio": 0.74},
+        {"name": "random_0.74", "allocator": "random", "ratio": 0.74},
+        {"name": "all4", "uniform": 4}
+    ],
+    "reference": "all8",
+    "wl_weight": 4,
+    "wl_activate": 8,
+    "subArray": 16,
+    "parallelRead": 16,
+    "neurosim_dir": "NeuroSim/Inference_pytorch/NeuroSIM",
+    "max_parallel": 4
+}

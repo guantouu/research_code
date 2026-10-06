@@ -3,7 +3,8 @@ ResNet for CIFAR-10/CIFAR-100, implemented in PyTorch.
 Original paper: 'Deep Residual Learning for Image Recognition,' https://arxiv.org/abs/1512.03385.
 """
 
-__all__ = ['ResNet', 'resnet20', 'resnet18', 'resnet50', 'ResBlock', 'ResUnit', 'ResInitBlock', 'get_resnet']
+__all__ = ['ResNet', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'ResBlock', 'ResUnit', 'ResInitBlock',
+           'get_resnet_cifar']
 
 import os
 import torch.nn as nn
@@ -132,10 +133,9 @@ def get_resnet_cifar(blocks, model_name=None, num_classes=10, **kwargs):
     """
     Create ResNet model for CIFAR with specific parameters.
     """
-    if blocks == 20:
-        layers = [3, 3, 3]
-    else:
+    if (blocks - 2) % 6 != 0:
         raise ValueError("Unsupported ResNet with number of blocks: {}".format(blocks))
+    layers = [(blocks - 2) // 6] * 3
 
     channels_per_layers = [16, 32, 64]
     channels = [[ci] * li for (ci, li) in zip(channels_per_layers, layers)]
@@ -159,3 +159,15 @@ def resnet20(num_classes=10, **kwargs):
         model_name="resnet20",
         num_classes=num_classes,
         **kwargs)
+
+
+def resnet32(num_classes=10, **kwargs):
+    return get_resnet_cifar(blocks=32, model_name="resnet32", num_classes=num_classes, **kwargs)
+
+
+def resnet44(num_classes=10, **kwargs):
+    return get_resnet_cifar(blocks=44, model_name="resnet44", num_classes=num_classes, **kwargs)
+
+
+def resnet56(num_classes=10, **kwargs):
+    return get_resnet_cifar(blocks=56, model_name="resnet56", num_classes=num_classes, **kwargs)

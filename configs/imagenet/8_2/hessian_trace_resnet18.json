@@ -1,0 +1,22 @@
+{
+    "exp_name": "strip_wise_hessian_trace",
+    "net": "resnet18",
+    "dataset": "imagenet",
+    "batch_size": 64,
+    "logdir": "/app/log",
+    "data": "/data/",
+    "ratio": 0.5,
+    "bits": {
+        "highly_sensitive": 8,
+        "insensitive": 2
+    },
+    "saliency": "quant_perturbation",
+    "hessian_samples": 2048,
+    "hutchinson_max_iters": 200,
+    "hutchinson_min_iters": 20,
+    "hutchinson_tol": 0.05,
+    "seed": 0,
+    "print_freq": 10,
+    "tag": "8_2",
+    "trace_estimator": "hutchinson"
+}

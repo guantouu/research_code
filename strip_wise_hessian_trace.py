@@ -7,13 +7,15 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from utils.common_utils import process_config
 from datetime import datetime
-from utils.strip_utils import compute_strip_importances, model_strip_group
+from utils.strip_utils import (compute_strip_importances, aggregate_layer_trace, layer_quant_perturbation,
+                               shrink_traces, strip_fisher_traces, saliency_from_traces, get_modules_list)
+from utils.bit_allocation import allocate_bits
 import json
-from models import dataset
+from models import dataset, registry
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='/app/configs/exp_for_cifar/hessian_trace.json', required=False)
+    parser.add_argument('--config', type=str, default='/app/configs/cifar10/8_4/hessian_trace_resnet20.json', required=False)
     args = parser.parse_args()
 
     print('Using config!')
@@ -31,37 +33,9 @@ def main():
     net = configs.net
 
     #--------------------------------------------------------------------------------------------------
-    if configs.dataset == 'cifar10':
-        _, val_loader = dataset.get_cifar10(batch_size=configs.batch_size)
-        num_classes=10
-    elif configs.dataset == 'cifar100':
-        _, val_loader = dataset.get_cifar100(batch_size=configs.batch_size)
-        num_classes=100
-    else:
-        raise ValueError("Unknown dataset type")
+    _, val_loader, num_classes = dataset.get_loaders(configs.dataset, configs.batch_size, train=False)
     #--------------------------------------------------------------------------------------------------
-    if net == 'resnet18':
-        from models.ResNet import resnet18
-        model = resnet18(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))    
-    elif net == 'resnet50':
-        from models.ResNet import resnet50
-        model = resnet50(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    elif net == 'resnet20':
-        from models.ResNet20 import resnet20
-        model = resnet20(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))        
-    elif net == 'vgg11':
-        from models.VGG import vgg11
-        model = vgg11(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    elif net == 'vgg19':
-        from models.VGG import vgg19
-        model = vgg19(num_classes)
-        model.load_state_dict(torch.load(inference_log_dir))
-    else:
-        raise ValueError("Unknown model type")
+    model = registry.build_float_model(net, num_classes, torch.load(inference_log_dir), configs.dataset)
 
     t_begin = time.time()
 
@@ -69,18 +43,79 @@ def main():
     model = model.cuda(0)
     criterion = nn.CrossEntropyLoss().cuda(0)
 
-    strip_group = hessian_trace(model, val_loader, criterion, configs)
-    strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}.json'
+    # estimate the Hessian on a training subset, not on the test set used for validation
+    hessian_loader = dataset.get_hessian_loader(configs.dataset, configs.batch_size, configs.hessian_samples,
+                                                seed=configs.seed)
+    saliency = hessian_trace(model, hessian_loader, criterion, configs)
+    logging.info('Hessian trace time: {:.1f}s'.format(time.time() - t_begin))
+
+    # saliency is computed once; ratio_sweep.py reuses it for any ratio / allocator.
+    # It depends on the bit pair through the quantization error, so other pairs than 8/4 set a tag (e.g. "8_2")
+    suffix = f"_{configs.tag}" if configs.get('tag') else ''
+    os.makedirs('saliency', exist_ok=True)
+    estimator = configs.get('trace_estimator', 'fisher')
+    estimator_tag = '' if estimator == 'hutchinson' else f'_{estimator}'
+    saliency_file = os.path.join('saliency', f'{configs.net}_{configs.dataset}_{configs.get("saliency", "quant_perturbation")}{estimator_tag}{suffix}.json')
+    with open(saliency_file, 'w') as json_file:
+        json.dump(saliency, json_file)
+    logging.info(f'Saliency saved to {saliency_file}')
+
+    strip_group = allocate_bits('saliency', saliency, configs.bits, configs.ratio, log=True)
+    strip_bit_config = f'{configs.net}_{configs.dataset}_saliency_{configs.ratio}{suffix}.json'
+    os.makedirs('bit_config', exist_ok=True)
     strip_bit_config = os.path.join('bit_config', strip_bit_config)
     with open(strip_bit_config, 'w') as json_file:
         json.dump(strip_group, json_file, indent=4)
 
     validate(val_loader, model, criterion, configs)
 
-def hessian_trace(model, val_loader, criterion, configs):
-    importances, strip_importances_per_layer = compute_strip_importances(model, val_loader, criterion)
-    strip_group = model_strip_group(model, importances, strip_importances_per_layer, configs.bits, configs.ratio)
-    return strip_group
+def hessian_trace(model, dataloader, criterion, configs):
+    """
+    Per-strip saliency, traces and layer scores. trace_estimator (config, default 'fisher') picks tr(H_ss):
+        'hutchinson'     Hutchinson estimate (as before); the estimate's variance is stored as 'trace_var'
+        'hutchinson_eb'  the same estimate shrunk toward its layer mean by its noise (strip_utils.shrink_traces);
+                         the raw estimate is kept as 'hutchinson_trace'
+        'fisher'         the true Fisher diagonal (strip_utils.strip_fisher_traces): PSD, so never negative,
+                         and exact on the calibration subset (no Hutchinson run); exact over all classes, or
+                         fisher_mc_samples sampled labels per image (for many classes, e.g. ImageNet)
+    On CIFAR-10 8/2 (ResNet20/56, VGG16) unconverged Hutchinson traces made 16-40 % of the strips negative,
+    and those strips were lowered first; both 'fisher' and 'hutchinson_eb' remove this, and 'fisher' was the
+    most robust, so it is the default.
+    The 'quant_perturbation' saliency and the layer score use the selected traces ('trace').
+    """
+    estimator = configs.get('trace_estimator', 'fisher')
+    extra = {}
+    if estimator in ('hutchinson', 'hutchinson_eb'):
+        _, strip_importances_per_layer, traces, variances = compute_strip_importances(
+            model, dataloader, criterion, configs.bits, saliency=configs.get('saliency', 'quant_perturbation'),
+            max_iters=configs.hutchinson_max_iters, min_iters=configs.hutchinson_min_iters,
+            tol=configs.hutchinson_tol, seed=configs.seed, return_traces=True, return_variance=True)
+        modules = list(strip_importances_per_layer)
+        extra = {'trace_var': variances}
+        if estimator == 'hutchinson_eb':
+            extra['hutchinson_trace'] = traces
+            traces = shrink_traces(traces, variances)
+            strip_importances_per_layer = saliency_from_traces(model, configs.bits, modules, traces)
+            logging.info('=> Empirical-Bayes shrinkage: negative strips {:.2%} -> {:.2%}'.format(
+                sum(x < 0 for t in extra['hutchinson_trace'].values() for x in t) / sum(len(t) for t in traces.values()),
+                sum(x < 0 for t in traces.values() for x in t) / sum(len(t) for t in traces.values())))
+    elif estimator == 'fisher':
+        if configs.get('saliency', 'quant_perturbation') != 'quant_perturbation':
+            raise ValueError("trace_estimator 'fisher' supports the quant_perturbation saliency only")
+        modules = get_modules_list(model, {'Conv2d'})
+        traces = strip_fisher_traces(model, modules, dataloader, criterion,
+                                     mc_samples=configs.get('fisher_mc_samples', 0), seed=configs.seed)
+        strip_importances_per_layer = saliency_from_traces(model, configs.bits, modules, traces)
+    else:
+        raise ValueError('Unknown trace_estimator: {}'.format(estimator))
+    layer_saliency = layer_quant_perturbation(model, configs.bits, modules, aggregate_layer_trace(traces, modules))
+    saliency = {}
+    for name, m in model.named_modules():
+        if m in strip_importances_per_layer:
+            saliency[registry.saliency_key(name, configs.dataset)] = {
+                'strip_len': m.in_channels, 'saliency': strip_importances_per_layer[m], 'trace': traces[m],
+                'layer_saliency': layer_saliency[m], **{k: v[m] for k, v in extra.items()}}
+    return saliency
 
 def validate(val_loader, model, criterion, configs):
     batch_time = AverageMeter('Time', ':6.3f')
