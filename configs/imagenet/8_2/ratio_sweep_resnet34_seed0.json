@@ -14,7 +14,8 @@
     "allocators": [
         "saliency",
         "random",
-        "hawqv2_layer"
+        "hawqv2_layer",
+        "hawqv2_ilp"
     ],
     "seed": 0,
     "search": "grid",

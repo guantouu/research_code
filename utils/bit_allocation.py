@@ -100,6 +100,72 @@ def hawqv2_layer_allocator(saliency, bits, ratio, **kwargs):
     return {n: [bits['insensitive'] if l else bits['highly_sensitive']] * len(saliency[n]['saliency'])
             for n, l in zip(names, low)}
 
+@register_allocator('hawqv2_ilp')
+def hawqv2_ilp_allocator(saliency, bits, ratio, **kwargs):
+    """
+    HAWQ-v2/V3 layer allocation as in the HAWQ release (github.com/Zhen-Dong/HAWQ, ILP.ipynb), on this
+    pipeline's layer scores: choose the layers at the low bitwidth by an integer linear program
+        minimize   sum_l x_l * layer_saliency_l            (x_l = 1: layer l at the low bitwidth)
+        subject to sum_l x_l * weights_l >= ratio * total weights   (model size: avg bits within the limit)
+    with the first conv layer fixed at the high bitwidth, as HAWQ keeps the first (and last) layer at 8 bits
+    (the last layer here is the FC, which is not part of the strip bit config), and every residual-path conv
+    tied to the first conv of its block (they read the same input), as ILP.ipynb ties the downsampling layers
+    (residual_partner). Solved exactly with
+    scipy.optimize.milp (HiGHS) instead of HAWQ's PuLP + GLPK. Unlike hawqv2_layer (layers taken in score
+    order until the first one that does not fit, achieved ratio <= ratio), the achieved low-bit fraction
+    is >= ratio, the choice is optimal for the scores, and it need not grow monotonically with the ratio.
+    Scores below 0 are clipped to 0, and a 1e-9 relative penalty on low-bit weights picks, among equal
+    scores, the fewest low-bit weights (so ratio 0 is all high). If the ratio cannot be reached without the
+    first layer, every other layer is low-bit.
+    """
+    from scipy.optimize import milp, LinearConstraint, Bounds
+    import numpy as np
+    missing = [n for n, s in saliency.items() if 'layer_saliency' not in s]
+    if missing:
+        raise ValueError("No 'layer_saliency' for {} layers (e.g. {}): re-run strip_wise_hessian_trace.py or "
+                         "back-fill the file with scripts/add_layer_saliency.py".format(len(missing), missing[0]))
+    names = list(saliency)
+    free = names[1:]
+    weights = np.array([len(saliency[n]['saliency']) * saliency[n]['strip_len'] for n in free], dtype=float)
+    total = weights.sum() + len(saliency[names[0]]['saliency']) * saliency[names[0]]['strip_len']
+    target = low_weight_budget(int(total), ratio)
+    if target > weights.sum():
+        low = np.ones(len(free), dtype=bool)
+    elif target <= 0:
+        low = np.zeros(len(free), dtype=bool)
+    else:
+        scores = np.array([max(saliency[n]['layer_saliency'], 0.0) for n in free])
+        cost = scores + 1e-9 * max(scores.max(), 1e-30) * weights / weights.max()
+        constraints = [LinearConstraint(weights[None, :], lb=target, ub=np.inf)]
+        for i, n in enumerate(free):
+            partner = residual_partner(n, free)
+            if partner is not None:
+                tie = np.zeros((1, len(free)))
+                tie[0, i], tie[0, free.index(partner)] = 1, -1
+                constraints.append(LinearConstraint(tie, lb=0, ub=0))
+        res = milp(cost, constraints=constraints, integrality=np.ones(len(free)), bounds=Bounds(0, 1))
+        if not res.success:
+            raise RuntimeError('hawqv2_ilp: MILP failed at ratio {}: {}'.format(ratio, res.message))
+        low = res.x > 0.5
+    config = {names[0]: [bits['highly_sensitive']] * len(saliency[names[0]]['saliency'])}
+    for n, l in zip(free, low):
+        config[n] = [bits['insensitive'] if l else bits['highly_sensitive']] * len(saliency[n]['saliency'])
+    return config
+
+def residual_partner(name, names):
+    """
+    The conv whose bitwidth HAWQ ties to a residual-path conv: the first conv of the same block
+    (CIFAR ResNet 'stageS.unitU.identity_conv' -> 'stageS.unitU.conv1', torchvision
+    'layerL.B.downsample.0' -> 'layerL.B.conv1'); None for other layers or if it is not in names.
+    """
+    if name.endswith('.identity_conv'):
+        partner = name[:-len('identity_conv')] + 'conv1'
+    elif '.downsample.' in name:
+        partner = name.split('.downsample.')[0] + '.conv1'
+    else:
+        return None
+    return partner if partner in names else None
+
 def bit_config_cost(bit_config, saliency, bits):
     """
     Hardware cost proxies: average weight bitwidth (weighted by strip length, i.e. cells), high-bit strip
